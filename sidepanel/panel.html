@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JobPilot</title>
+  <!--
+    panel.css is UNCHANGED and stays the single source of styling. Vite treats
+    this link as a build input: it hashes the file into dist/bundle/ and rewrites
+    the href. Linking it here rather than importing it from main.jsx means the
+    stylesheet is a real <link> in the emitted HTML, so the panel paints styled on
+    the first frame instead of flashing unstyled while the JS boots.
+  -->
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <!--
+    The original 471 lines of markup live in sidepanel/panel.html.orig (gitignored)
+    for the agents porting them to JSX. React owns everything below this point.
+
+    NOTE for the port: panel.css styles `#app` with `height: 100vh` (viewport
+    units, not a percentage chain), so rendering <div id="app"> INSIDE this #root
+    keeps the existing layout working with zero CSS changes.
+  -->
+  <div id="root"></div>
+  <script type="module" src="./react/main.jsx"></script>
+</body>
+</html>

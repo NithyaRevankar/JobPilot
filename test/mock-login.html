@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — Northwind Robotics Careers</title>
+<style>
+  :root {
+    --brand: #3730a3;
+    --brand-light: #eef2ff;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --line: #d1d5db;
+    --danger: #b91c1c;
+    --ok: #15803d;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: #f3f4f6;
+    line-height: 1.5;
+  }
+  header.site {
+    background: var(--brand);
+    color: #fff;
+    padding: 18px 24px;
+    font-weight: 600;
+  }
+  main { max-width: 420px; margin: 48px auto; padding: 0 16px; }
+  .card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--line);
+    border-radius: var(--radius); font-size: 14px; font-family: inherit;
+  }
+  input:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+  #code { letter-spacing: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 18px; }
+  button {
+    margin-top: 22px; width: 100%; padding: 10px; border: 0; cursor: pointer;
+    background: var(--brand); color: #fff; font-size: 14px; font-weight: 600;
+    border-radius: var(--radius);
+  }
+  .err { color: var(--danger); font-size: 13px; margin-top: 10px; min-height: 18px; }
+  .note {
+    margin-top: 20px; padding: 12px 14px; background: var(--brand-light);
+    border-radius: var(--radius); font-size: 12.5px; color: var(--muted);
+  }
+  .done { text-align: center; }
+  .done h1 { color: var(--ok); }
+  .done a { color: var(--brand); font-weight: 600; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header class="site">Northwind Robotics — Careers</header>
+<main>
+
+  <!-- Step 1: username + password. The password field is type=password, so the
+       content script hard-rejects any fill the model attempts itself. -->
+  <section id="step-credentials" class="card">
+    <h1>Sign in to apply</h1>
+    <p class="sub">Use your Northwind candidate account.</p>
+    <form id="form-credentials">
+      <label for="username">Username or email</label>
+      <input type="text" id="username" name="username" autocomplete="username" required>
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+
+      <button type="submit">Sign in</button>
+      <div class="err" id="err-credentials"></div>
+    </form>
+    <div class="note">
+      Mock page — any non-empty username and password are accepted. Nothing is sent anywhere.
+    </div>
+  </section>
+
+  <!-- Step 2: the OTP field is deliberately named "code" with NO
+       autocomplete="one-time-code". Attribute sniffing alone does NOT flag it as a
+       credential field. It is protected only because request_secret marks whatever
+       element it fills as sticky-secret, so a later read_page still hides the value.
+       That is the mechanism this step exists to exercise. -->
+  <section id="step-otp" class="card" hidden>
+    <h1>Two-factor authentication</h1>
+    <p class="sub">Enter the 6-digit code from your authenticator app.</p>
+    <form id="form-otp">
+      <label for="code">Verification code</label>
+      <input type="text" id="code" name="code" inputmode="numeric" maxlength="6" required>
+
+      <button type="submit">Verify</button>
+      <div class="err" id="err-otp"></div>
+    </form>
+    <div class="note">
+      Mock page — any 6 digits are accepted. Try <code>123456</code>.
+    </div>
+  </section>
+
+  <section id="step-done" class="card done" hidden>
+    <h1>Signed in</h1>
+    <p class="sub">You can now continue to the application form.</p>
+    <p><a id="continue-link" href="mock-application.html">Continue to the application →</a></p>
+    <div class="note" id="audit"></div>
+  </section>
+
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const mask = (s) => s ? '•'.repeat(s.length) : '(empty)';
+
+  $('form-credentials').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const u = $('username').value.trim();
+    const p = $('password').value;
+    if (!u || !p) {
+      $('err-credentials').textContent = 'Username and password are required.';
+      return;
+    }
+    $('err-credentials').textContent = '';
+    $('step-credentials').hidden = true;
+    $('step-otp').hidden = false;
+    $('code').focus();
+  });
+
+  $('form-otp').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const code = $('code').value.trim();
+    if (!/^\d{6}$/.test(code)) {
+      $('err-otp').textContent = 'Enter exactly 6 digits.';
+      return;
+    }
+    $('err-otp').textContent = '';
+    $('step-otp').hidden = true;
+    $('step-done').hidden = false;
+    // Masked so this page never renders a secret as page text either — read_page
+    // in text mode would otherwise pick it up.
+    $('audit').textContent =
+      `Received username "${$('username').value.trim()}", password ${mask($('password').value)}, code ${mask(code)}.`;
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,306 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Widgets — CONTRACT-V9 fixture</title>
+<!--
+  Controls that no amount of clicking and typing can operate, each taken from a
+  shape that ships on real portals:
+
+  1. #v-trigger   a VIRTUALIZED listbox (react-window style): 500 options exist in
+                  the data and about 21 exist in the DOM. "Zanzibar" is #480, so it
+                  is not merely hard to find — it is not there until the list is
+                  scrolled. No selector matches it and no wait produces it.
+  2. #rank        a drag-to-rank list on pointer events, the way SortableJS and
+                  dnd-kit work. It ignores clicks entirely; the order comes from the
+                  moves BETWEEN pointerdown and pointerup.
+  3. #chip/#bin   the HTML5 drag-and-drop protocol (draggable=true). Pointer events
+                  do nothing here — it only listens for dragstart/drop.
+  4. #editor      a rich-text editor that only accepts a paste event, like Quill or
+                  Draft.js. Setting textContent or firing `input` is ignored.
+  5. #cover       a textarea whose form submits on Ctrl+Enter and does nothing on a
+                  bare Enter — a chord, which needs modifier flags.
+  6. #thumb       a custom slider with no <input type=range> behind it. Its value
+                  comes from where the thumb is dragged to.
+  7. #consent     a web component whose button lives in an open shadow root. A hit-test
+                  at the host's centre returns that button, and Node.contains() is false
+                  across the boundary — so a naive blocker check calls a component's own
+                  internals an obstruction and refuses every click on it.
+  8. #places      a drag-to-rank list built from <a href>. `draggable` is true by DEFAULT
+                  on links and images, so picking the drag protocol from the property
+                  (rather than from an explicit attribute) sends this down the HTML5 path
+                  where nothing is listening.
+-->
+<style>
+  body { font: 14px system-ui; padding: 20px; }
+  .field { margin: 18px 0; }
+  h2 { font-size: 14px; margin: 0 0 6px; }
+  #v-list { display: none; height: 400px; overflow-y: auto; border: 1px solid #888; width: 260px; }
+  #v-spacer { position: relative; }
+  #v-list .opt { position: absolute; height: 24px; line-height: 24px; padding: 0 8px; width: 100%; box-sizing: border-box; cursor: pointer; }
+  #v-list .opt:hover { background: #eef; }
+  #rank { list-style: none; padding: 0; width: 260px; }
+  #rank li { border: 1px solid #999; padding: 6px 10px; margin: 3px 0; background: #fafafa; cursor: grab; }
+  #chip { display: inline-block; border: 1px solid #666; padding: 5px 12px; background: #eef; cursor: grab; }
+  #bin { display: inline-block; border: 2px dashed #999; padding: 14px 26px; margin-left: 20px; }
+  #editor { border: 1px solid #888; padding: 8px; width: 300px; min-height: 40px; }
+  #slider { position: relative; width: 300px; height: 8px; background: #ddd; margin: 18px 0; }
+  #thumb { position: absolute; top: -6px; left: 0; width: 20px; height: 20px; border-radius: 50%; background: #357; cursor: grab; }
+  .out { font-family: ui-monospace, monospace; color: #060; }
+</style>
+
+<div class="field">
+  <h2>Country of citizenship (virtualized — 500 options, ~21 in the DOM)</h2>
+  <button id="v-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"
+          aria-controls="v-list">Select One</button>
+  <div id="v-list" role="listbox"><div id="v-spacer"></div></div>
+  <div>chosen: <span id="v-value" class="out"></span></div>
+</div>
+
+<div class="field">
+  <h2>Rank these skills (drag to reorder — pointer events, clicks do nothing)</h2>
+  <ul id="rank">
+    <li data-skill="React">React</li>
+    <li data-skill="Python">Python</li>
+    <li data-skill="Rust">Rust</li>
+  </ul>
+  <div>order: <span id="rank-value" class="out">React,Python,Rust</span></div>
+</div>
+
+<div class="field">
+  <h2>Attach a tag (HTML5 drag-and-drop)</h2>
+  <span id="chip" draggable="true">Senior</span>
+  <span id="bin">drop here</span>
+  <div>dropped: <span id="bin-value" class="out"></span></div>
+</div>
+
+<div class="field">
+  <h2>Cover letter (rich editor — accepts a paste event only)</h2>
+  <div id="editor" contenteditable="true"></div>
+  <div>editor model: <span id="editor-value" class="out"></span></div>
+</div>
+
+<div class="field">
+  <h2>Notes (Ctrl+Enter submits; plain Enter does not)</h2>
+  <textarea id="cover" rows="2" cols="40"></textarea>
+  <div>submit log: <span id="cover-value" class="out"></span></div>
+</div>
+
+<div class="field">
+  <h2>Account password (V2 §0 — one door for secrets, and paste is not it)</h2>
+  <input id="pw" type="password" autocomplete="new-password">
+</div>
+
+<div class="field">
+  <h2>Expected salary (custom slider — no input type=range)</h2>
+  <div id="slider"><div id="thumb"></div></div>
+  <div>salary: <span id="slider-value" class="out">0</span></div>
+</div>
+
+<!--
+  A web component. Its button lives in an open shadow root, so elementFromPoint at the
+  HOST's centre returns the shadow button — and Node.contains() is false across that
+  boundary. Anything that reads "the top element is not inside my element" as "something is
+  covering me" refuses every click on a custom element, pointing at its own internals.
+-->
+<div class="field">
+  <h2>Consent (a web component — its button lives in a shadow root)</h2>
+  <jp-consent id="consent"></jp-consent>
+  <div>consent: <span id="consent-value" class="out"></span></div>
+</div>
+
+<!--
+  A sortable built from <a href>. `draggable` is true by DEFAULT on links and images, so
+  anything choosing its drag protocol from the PROPERTY sends this down the HTML5 path,
+  where its pointer handlers hear nothing at all.
+-->
+<div class="field">
+  <h2>Preferred locations (drag to rank — built from links, not divs)</h2>
+  <ul id="places">
+    <li><a href="#" data-place="Berlin">Berlin</a></li>
+    <li><a href="#" data-place="Lisbon">Lisbon</a></li>
+    <li><a href="#" data-place="Oslo">Oslo</a></li>
+  </ul>
+  <div>order: <span id="places-value" class="out">Berlin,Lisbon,Oslo</span></div>
+</div>
+
+<!-- 9. Fields that fight the write: a controlled input that reverts any value its
+     framework did not set, and a phone mask that reformats every write. Plus a
+     native select whose option label is templated with internal whitespace. -->
+<div class="field">
+  <h2>Write-fighting fields</h2>
+  <label>Locked title <input id="locked" type="text"></label>
+  <label>Masked phone <input id="masked" type="tel"></label>
+  <label>Pronouns
+    <select id="spaced">
+      <option value="">Choose…</option>
+      <option>
+        Prefer not to say
+      </option>
+    </select>
+  </label>
+</div>
+
+<script>
+  // ---- 1. virtualized listbox --------------------------------------------------
+  const COUNTRIES = [];
+  for (let i = 1; i <= 500; i++) COUNTRIES.push('Country ' + i);
+  COUNTRIES[479] = 'Zanzibar';                    // index 479 → the 480th row
+
+  const ROW = 24;
+  const vList = document.getElementById('v-list');
+  const vSpacer = document.getElementById('v-spacer');
+  const vTrigger = document.getElementById('v-trigger');
+  const vValue = document.getElementById('v-value');
+  vSpacer.style.height = (COUNTRIES.length * ROW) + 'px';
+
+  function renderRows() {
+    const first = Math.max(0, Math.floor(vList.scrollTop / ROW) - 2);
+    const last = Math.min(COUNTRIES.length, first + Math.ceil(vList.clientHeight / ROW) + 4);
+    vSpacer.textContent = '';
+    for (let i = first; i < last; i++) {
+      const div = document.createElement('div');
+      div.className = 'opt';
+      div.setAttribute('role', 'option');
+      div.textContent = COUNTRIES[i];
+      div.style.top = (i * ROW) + 'px';
+      // mousedown, not click — the Workday shape: .click() never opens or picks.
+      div.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        vValue.textContent = COUNTRIES[i];
+        vTrigger.textContent = COUNTRIES[i];
+        vList.style.display = 'none';
+        vTrigger.setAttribute('aria-expanded', 'false');
+      });
+      vSpacer.appendChild(div);
+    }
+  }
+  vList.addEventListener('scroll', renderRows);
+  vTrigger.addEventListener('click', () => {
+    const open = vList.style.display === 'block';
+    vList.style.display = open ? 'none' : 'block';
+    vTrigger.setAttribute('aria-expanded', String(!open));
+    if (!open) { vList.scrollTop = 0; renderRows(); }   // a fresh open starts at the top
+  });
+
+  // ---- 2. pointer-driven sortable ----------------------------------------------
+  const rank = document.getElementById('rank');
+  const rankValue = document.getElementById('rank-value');
+  let dragged = null;
+  rank.addEventListener('pointerdown', (e) => {
+    const li = e.target.closest('li');
+    if (li) dragged = li;
+  });
+  rank.addEventListener('pointermove', (e) => {
+    if (!dragged) return;
+    const over = e.target.closest('li');
+    if (!over || over === dragged) return;
+    const rect = over.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    rank.insertBefore(dragged, before ? over : over.nextSibling);
+  });
+  const endDrag = () => {
+    if (!dragged) return;
+    dragged = null;
+    rankValue.textContent = Array.from(rank.children).map((li) => li.dataset.skill).join(',');
+  };
+  rank.addEventListener('pointerup', endDrag);
+  document.addEventListener('pointerup', endDrag);
+  // Clicking does nothing at all — the order only ever comes from a drag.
+
+  // ---- 3. HTML5 drag-and-drop ---------------------------------------------------
+  const chip = document.getElementById('chip');
+  const bin = document.getElementById('bin');
+  chip.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', chip.textContent); });
+  bin.addEventListener('dragover', (e) => e.preventDefault());
+  bin.addEventListener('drop', (e) => {
+    e.preventDefault();
+    document.getElementById('bin-value').textContent = e.dataTransfer.getData('text/plain') || chip.textContent;
+  });
+
+  // ---- 4. paste-only editor -----------------------------------------------------
+  // Its "model" only ever updates from a paste event. Typing into the DOM node is
+  // exactly what a controlled editor throws away on its next render.
+  const editor = document.getElementById('editor');
+  editor.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+    editor.textContent = text;
+    document.getElementById('editor-value').textContent = text;
+  });
+
+  // ---- 5. Ctrl+Enter chord ------------------------------------------------------
+  document.getElementById('cover').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    document.getElementById('cover-value').textContent =
+      (e.ctrlKey || e.metaKey) ? 'submitted' : 'newline';
+  });
+
+  // ---- 6. custom slider ---------------------------------------------------------
+  const slider = document.getElementById('slider');
+  const thumb = document.getElementById('thumb');
+  const sliderValue = document.getElementById('slider-value');
+  let sliding = false;
+  thumb.addEventListener('pointerdown', () => { sliding = true; });
+  document.addEventListener('pointermove', (e) => {
+    if (!sliding) return;
+    const rect = slider.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    thumb.style.left = (x - 10) + 'px';
+    sliderValue.textContent = String(Math.round((x / rect.width) * 200));
+  });
+  document.addEventListener('pointerup', () => { sliding = false; });
+
+  // ---- 7. web component with an open shadow root --------------------------------
+  customElements.define('jp-consent', class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: 'open' });
+      const btn = document.createElement('button');
+      btn.id = 'agree-btn'; // an id inside the shadow root: a descendant selector cannot cross it
+      btn.textContent = 'I agree';
+      // Fill the host exactly, so a hit-test at the host's centre lands on the shadow
+      // button — the geometry that makes this a real test rather than a decorative one.
+      btn.style.cssText = 'display:block;width:100%;height:100%;padding:8px 16px;';
+      btn.addEventListener('click', () => {
+        document.getElementById('consent-value').textContent = 'agreed';
+      });
+      root.appendChild(btn);
+      this.style.display = 'inline-block';
+    }
+  });
+
+  // ---- 8. pointer-driven sortable built from links -------------------------------
+  const places = document.getElementById('places');
+  const placesValue = document.getElementById('places-value');
+  let heldPlace = null;
+  places.addEventListener('pointerdown', (e) => {
+    heldPlace = e.target.closest('li');
+  });
+  // Links navigate on click; a ranking widget does not want that.
+  places.addEventListener('click', (e) => e.preventDefault());
+  document.addEventListener('pointermove', (e) => {
+    if (!heldPlace) return;
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const li = over && over.closest ? over.closest('#places li') : null;
+    if (!li || li === heldPlace) return;
+    const after = li.compareDocumentPosition(heldPlace) & Node.DOCUMENT_POSITION_PRECEDING;
+    li.parentNode.insertBefore(heldPlace, after ? li.nextSibling : li);
+  });
+  document.addEventListener('pointerup', () => {
+    if (!heldPlace) return;
+    heldPlace = null;
+    placesValue.textContent =
+      [...places.querySelectorAll('a')].map((a) => a.dataset.place).join(',');
+  });
+
+  // ---- 9. write-fighting fields ---------------------------------------------------
+  // The locked field models a controlled component whose state never came from the DOM:
+  // whatever lands there is thrown away on its next "render".
+  const locked = document.getElementById('locked');
+  locked.addEventListener('input', () => { setTimeout(() => { locked.value = ''; }, 0); });
+  // The mask models every phone/salary formatter: the write is ACCEPTED and reformatted,
+  // so an exact string compare can never match again.
+  const masked = document.getElementById('masked');
+  masked.addEventListener('input', () => {
+    const d = masked.value.replace(/\D+/g, '').slice(0, 10);
+    masked.value = d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : d;
+  });
+</script>

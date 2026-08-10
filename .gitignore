@@ -1,0 +1,26 @@
+# Playwright CLI scratch output (console logs, page dumps, screenshots)
+.playwright-cli/
+
+# Icons ARE committed: manifest.json references them, so a fresh clone must be
+# loadable without running assets/make_icons.py first.
+
+# Node. Playwright stays dev-only (test/workday-harness.mjs), but react/react-dom
+# DO ship now — Vite bundles them into dist/.
+# No trailing slash: node_modules is sometimes a symlink, which "node_modules/" misses.
+node_modules
+package-lock.json
+
+# Vite build output. This is what gets loaded unpacked in Chrome; it is fully
+# reproducible from source via `npm run build`, so it is not committed.
+dist/
+
+# Verbatim snapshot of the pre-React panel markup, kept as a porting reference
+# for the phase-2 agents. Regenerate from git history, do not commit.
+sidepanel/panel.html.orig
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

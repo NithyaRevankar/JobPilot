@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Senior Frontend Engineer — Northwind Robotics</title>
+<style>
+  :root {
+    --brand: #3730a3;
+    --brand-light: #eef2ff;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --line: #d1d5db;
+    --danger: #b91c1c;
+    --ok: #15803d;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: #f3f4f6;
+    line-height: 1.5;
+  }
+  header.site {
+    background: var(--brand);
+    color: #fff;
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo-mark {
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    background: linear-gradient(180deg, #6366f1, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 18px;
+  }
+  header.site h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header.site .tagline { font-size: 12px; opacity: .8; margin: 0; }
+  main {
+    max-width: 780px;
+    margin: 28px auto 64px;
+    padding: 0 16px;
+  }
+  section.card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 28px 32px;
+    margin-bottom: 24px;
+  }
+  .job-title { margin: 0 0 4px; font-size: 26px; }
+  .job-meta { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  .job-desc h3 { font-size: 15px; margin: 18px 0 6px; }
+  .job-desc ul { margin: 6px 0; padding-left: 22px; }
+  .job-desc li { margin: 3px 0; }
+
+  form h2 { font-size: 20px; margin: 0 0 4px; }
+  .form-hint { color: var(--muted); font-size: 13px; margin: 0 0 22px; }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 560px) { .grid-2 { grid-template-columns: 1fr; } }
+  .field { margin-bottom: 18px; }
+  .field label, .field .group-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 5px;
+  }
+  .req { color: var(--danger); }
+  input[type="text"], input[type="email"], input[type="tel"],
+  input[type="url"], input[type="number"], select, textarea {
+    width: 100%;
+    padding: 9px 11px;
+    font: inherit;
+    font-size: 14px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink);
+  }
+  textarea { min-height: 110px; resize: vertical; }
+  input:focus, select:focus, textarea:focus,
+  .combo-trigger:focus, [role="option"]:focus {
+    outline: 2px solid #818cf8;
+    outline-offset: 1px;
+  }
+  input[aria-invalid="true"], select[aria-invalid="true"],
+  textarea[aria-invalid="true"], .combo-trigger[aria-invalid="true"] {
+    border-color: var(--danger);
+  }
+  .field-error {
+    display: none;
+    color: var(--danger);
+    font-size: 12.5px;
+    margin-top: 4px;
+  }
+  .field-error.visible { display: block; }
+  .sub-note { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .state-echo {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* Resume upload: styled button wrapping a hidden file input */
+  .upload-dropzone {
+    border: 2px dashed var(--line);
+    border-radius: var(--radius);
+    padding: 22px;
+    text-align: center;
+    background: #fafafa;
+  }
+  .upload-dropzone input[type="file"] { display: none; }
+  .upload-btn {
+    display: inline-block;
+    background: var(--brand);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 9px 18px;
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .upload-btn:hover { background: #312e81; }
+  .upload-filename { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .upload-filename.has-file { color: var(--ok); font-weight: 600; }
+
+  /* Custom combobox (work authorization) */
+  .combo { position: relative; }
+  .combo-trigger {
+    width: 100%;
+    padding: 9px 34px 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .combo-trigger::after {
+    content: "";
+    position: absolute;
+    right: 13px; top: 16px;
+    border: 5px solid transparent;
+    border-top-color: var(--muted);
+  }
+  .combo-trigger.placeholder { color: var(--muted); }
+  .combo-list {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 4px);
+    left: 0; right: 0;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.12);
+    padding: 4px;
+  }
+  .combo-list[hidden] { display: none; }
+  .combo-list [role="option"] {
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .combo-list [role="option"]:hover { background: var(--brand-light); }
+  .combo-list [role="option"][aria-selected="true"] {
+    background: var(--brand-light);
+    font-weight: 600;
+  }
+
+  /* Radio + checkbox rows */
+  .choice-row { display: flex; gap: 18px; flex-wrap: wrap; }
+  .choice-row label, .consent-row label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 400;
+    font-size: 14px;
+    margin: 0;
+    cursor: pointer;
+  }
+  .consent-row { margin-top: 4px; }
+
+  /* Honeypot: visually hidden, real users never see or fill it */
+  .hp-field {
+    position: absolute;
+    left: -9999px;
+    top: auto;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+  }
+
+  .submit-row { margin-top: 26px; }
+  .submit-btn {
+    background: var(--brand);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 12px 28px;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .submit-btn:hover { background: #312e81; }
+  .form-error-summary {
+    display: none;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: var(--danger);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 13.5px;
+    margin-bottom: 16px;
+  }
+  .form-error-summary.visible { display: block; }
+
+  .success-panel {
+    text-align: center;
+    padding: 48px 20px;
+  }
+  .success-panel .check {
+    font-size: 52px;
+    color: var(--ok);
+    line-height: 1;
+  }
+  .success-panel h2 { font-size: 24px; margin: 14px 0 6px; }
+  .success-panel .conf { color: var(--muted); font-size: 15px; }
+  .success-panel .hp-warning {
+    margin-top: 18px;
+    color: var(--danger);
+    font-size: 13px;
+  }
+  footer.site {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 20px;
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="logo-mark">N</div>
+  <div>
+    <h1>Northwind Robotics</h1>
+    <p class="tagline">Careers — powered by MockATS (local test page, nothing is sent anywhere)</p>
+  </div>
+</header>
+
+<main>
+  <section class="card job-desc">
+    <h2 class="job-title">Senior Frontend Engineer</h2>
+    <p class="job-meta">Engineering · Full-time · Austin, TX (hybrid) · Req #ENG-2214</p>
+    <p>Northwind Robotics builds fleet-management software for warehouse robots.
+       We are looking for a senior frontend engineer to own the operator console:
+       a real-time dashboard used around the clock by warehouse teams on three continents.</p>
+    <h3>What you'll do</h3>
+    <ul>
+      <li>Design and ship features for a large TypeScript/React codebase.</li>
+      <li>Own real-time data visualization for hundreds of concurrent robots.</li>
+      <li>Work with robotics and platform teams to define operator workflows.</li>
+      <li>Mentor mid-level engineers and lead design reviews.</li>
+    </ul>
+    <h3>What we're looking for</h3>
+    <ul>
+      <li>5+ years building production web applications.</li>
+      <li>Deep knowledge of browser performance and accessibility.</li>
+      <li>Experience with WebSocket- or WebRTC-based live UIs is a plus.</li>
+    </ul>
+  </section>
+
+  <section class="card" id="application-card">
+    <form id="application-form" novalidate>
+      <h2>Apply for this position</h2>
+      <p class="form-hint">Fields marked <span class="req">*</span> are required. This is a local mock — submitting stores nothing.</p>
+
+      <div class="form-error-summary" id="form-error-summary" role="alert"></div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="first-name">First name <span class="req">*</span></label>
+          <input type="text" id="first-name" name="first_name" autocomplete="off">
+          <div class="state-echo" id="first-name-state">component state: ""</div>
+          <p class="sub-note">Controlled input: internal state updates only on real
+             <code>input</code> events; direct <code>.value</code> writes are reverted
+             (mimics React).</p>
+          <div class="field-error" id="err-first-name">First name is required.</div>
+        </div>
+        <div class="field">
+          <label for="last-name">Last name <span class="req">*</span></label>
+          <input type="text" id="last-name" name="last_name" autocomplete="family-name">
+          <div class="field-error" id="err-last-name">Last name is required.</div>
+        </div>
+      </div>
+
+      <!-- Honeypot: hidden from real users; automated agents should leave it empty -->
+      <div class="hp-field" aria-hidden="true">
+        <label for="middle-initial">Middle initial</label>
+        <input type="text" id="middle-initial" name="middle_initial" tabindex="-1" autocomplete="off">
+      </div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="email">Email <span class="req">*</span></label>
+          <input type="email" id="email" name="email" autocomplete="email" placeholder="you@example.com">
+          <div class="field-error" id="err-email">Enter a valid email address.</div>
+        </div>
+        <div class="field">
+          <label for="phone">Phone</label>
+          <input type="tel" id="phone" name="phone" autocomplete="tel" placeholder="+1 555 000 1234">
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="location">Location (city) <span class="req">*</span></label>
+          <input type="text" id="location" name="location" placeholder="e.g. Austin, TX">
+          <div class="field-error" id="err-location">Location is required.</div>
+        </div>
+        <div class="field">
+          <label for="linkedin">LinkedIn URL</label>
+          <input type="url" id="linkedin" name="linkedin" placeholder="https://linkedin.com/in/…">
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="group-label" id="resume-label">Resume / CV <span class="req">*</span></span>
+        <div class="upload-dropzone" id="resume-dropzone">
+          <button type="button" class="upload-btn" id="resume-btn">Choose file</button>
+          <input type="file" id="resume-input" name="resume"
+                 accept=".pdf,.doc,.docx,.txt" aria-labelledby="resume-label">
+          <div class="upload-filename" id="resume-filename">No file selected — PDF, DOC, DOCX or TXT, max 8 MB</div>
+        </div>
+        <div class="field-error" id="err-resume">Please attach your resume.</div>
+      </div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="experience">Years of relevant experience <span class="req">*</span></label>
+          <input type="number" id="experience" name="years_experience" min="0" max="60" step="1">
+          <div class="field-error" id="err-experience">Enter your years of experience (0–60).</div>
+        </div>
+        <div class="field">
+          <label for="country">Country of residence <span class="req">*</span></label>
+          <select id="country" name="country">
+            <option value="">Select a country…</option>
+            <option>United States</option>
+            <option>Canada</option>
+            <option>Mexico</option>
+            <option>United Kingdom</option>
+            <option>Ireland</option>
+            <option>Germany</option>
+            <option>France</option>
+            <option>Netherlands</option>
+            <option>Spain</option>
+            <option>Portugal</option>
+            <option>Italy</option>
+            <option>Poland</option>
+            <option>Sweden</option>
+            <option>Norway</option>
+            <option>Denmark</option>
+            <option>Finland</option>
+            <option>Switzerland</option>
+            <option>Austria</option>
+            <option>Czech Republic</option>
+            <option>Romania</option>
+            <option>India</option>
+            <option>Singapore</option>
+            <option>Japan</option>
+            <option>South Korea</option>
+            <option>Australia</option>
+            <option>New Zealand</option>
+            <option>Brazil</option>
+            <option>Argentina</option>
+            <option>South Africa</option>
+            <option>United Arab Emirates</option>
+            <option>Israel</option>
+            <option>Other</option>
+          </select>
+          <div class="field-error" id="err-country">Select your country.</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="group-label" id="work-auth-label">Are you legally authorized to work in the United States? <span class="req">*</span></span>
+        <div class="combo" id="work-auth-combo">
+          <div class="combo-trigger placeholder" id="work-auth-trigger"
+               role="combobox" tabindex="0"
+               aria-expanded="false" aria-haspopup="listbox"
+               aria-controls="work-auth-listbox"
+               aria-labelledby="work-auth-label">Select…</div>
+          <div class="combo-list" id="work-auth-listbox" role="listbox"
+               aria-labelledby="work-auth-label" hidden>
+            <div role="option" data-value="Yes" tabindex="-1">Yes</div>
+            <div role="option" data-value="No" tabindex="-1">No</div>
+          </div>
+        </div>
+        <div class="field-error" id="err-work-auth">Select Yes or No.</div>
+      </div>
+
+      <div class="field">
+        <span class="group-label">Preferred work arrangement <span class="req">*</span></span>
+        <div class="choice-row" role="radiogroup" aria-label="Preferred work arrangement">
+          <label><input type="radio" name="work_mode" value="remote"> Remote</label>
+          <label><input type="radio" name="work_mode" value="hybrid"> Hybrid</label>
+          <label><input type="radio" name="work_mode" value="onsite"> On-site</label>
+        </div>
+        <div class="field-error" id="err-work-mode">Choose remote, hybrid, or on-site.</div>
+      </div>
+
+      <div class="field">
+        <label for="salary">Salary expectation (annual, optional)</label>
+        <input type="text" id="salary" name="salary" placeholder="e.g. $165,000 or negotiable">
+      </div>
+
+      <div class="field">
+        <label for="why-role">Why do you want this role? <span class="req">*</span></label>
+        <textarea id="why-role" name="why_role" maxlength="500"
+                  placeholder="A few sentences are enough."></textarea>
+        <div class="field-error" id="err-why-role">Please answer this question (at least 20 characters).</div>
+      </div>
+
+      <div class="field consent-row">
+        <label>
+          <input type="checkbox" id="consent" name="privacy_consent">
+          <span>I consent to Northwind Robotics processing my application data
+                per the privacy policy. <span class="req">*</span></span>
+        </label>
+        <div class="field-error" id="err-consent">You must accept the privacy policy to apply.</div>
+      </div>
+
+      <div class="submit-row">
+        <button type="submit" class="submit-btn" id="submit-btn">Submit application</button>
+      </div>
+    </form>
+  </section>
+</main>
+
+<footer class="site">Local mock page for JobPilot agent testing — no data leaves this browser.</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var form = document.getElementById('application-form');
+  var summary = document.getElementById('form-error-summary');
+
+  /* ------------------------------------------------------------------
+   * Controlled first-name input (React-style).
+   * Internal state changes ONLY via 'input' events. Any direct .value
+   * write that skips events is reverted on the next "render" tick, and
+   * validation reads the internal state — not the DOM value.
+   * ------------------------------------------------------------------ */
+  var firstNameEl = document.getElementById('first-name');
+  var firstNameEcho = document.getElementById('first-name-state');
+  var controlledState = { firstName: '' };
+
+  function renderControlled() {
+    if (firstNameEl.value !== controlledState.firstName) {
+      firstNameEl.value = controlledState.firstName; // revert rogue writes
+    }
+    firstNameEcho.textContent = 'component state: "' + controlledState.firstName + '"';
+  }
+  firstNameEl.addEventListener('input', function (e) {
+    controlledState.firstName = e.target.value;
+    renderControlled();
+  });
+  setInterval(renderControlled, 300); // simulated re-render loop
+
+  /* ---------------- Resume upload (hidden file input) ---------------- */
+  var resumeBtn = document.getElementById('resume-btn');
+  var resumeInput = document.getElementById('resume-input');
+  var resumeName = document.getElementById('resume-filename');
+
+  resumeBtn.addEventListener('click', function () { resumeInput.click(); });
+  resumeInput.addEventListener('change', function () {
+    if (resumeInput.files.length > 0) {
+      var f = resumeInput.files[0];
+      resumeName.textContent = f.name + ' (' + Math.max(1, Math.round(f.size / 1024)) + ' KB)';
+      resumeName.classList.add('has-file');
+    } else {
+      resumeName.textContent = 'No file selected — PDF, DOC, DOCX or TXT, max 8 MB';
+      resumeName.classList.remove('has-file');
+    }
+  });
+  // Accept drag-and-drop onto the dropzone (agents may dispatch `drop`).
+  var dropzone = document.getElementById('resume-dropzone');
+  dropzone.addEventListener('dragover', function (e) { e.preventDefault(); });
+  dropzone.addEventListener('drop', function (e) {
+    e.preventDefault();
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      resumeInput.files = e.dataTransfer.files;
+      resumeInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+
+  /* -------------- Custom combobox: work authorization --------------- */
+  var comboTrigger = document.getElementById('work-auth-trigger');
+  var comboList = document.getElementById('work-auth-listbox');
+  var comboOptions = Array.prototype.slice.call(comboList.querySelectorAll('[role="option"]'));
+  var workAuthValue = '';
+
+  function setComboOpen(open) {
+    comboList.hidden = !open;
+    comboTrigger.setAttribute('aria-expanded', String(open));
+  }
+  function selectWorkAuth(optionEl) {
+    workAuthValue = optionEl.getAttribute('data-value');
+    comboOptions.forEach(function (o) {
+      o.setAttribute('aria-selected', String(o === optionEl));
+    });
+    comboTrigger.textContent = optionEl.textContent;
+    comboTrigger.classList.remove('placeholder');
+    setComboOpen(false);
+    comboTrigger.focus();
+  }
+  comboTrigger.addEventListener('click', function () {
+    setComboOpen(comboList.hidden);
+  });
+  comboTrigger.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      setComboOpen(true);
+      comboOptions[0].focus();
+    } else if (e.key === 'Escape') {
+      setComboOpen(false);
+    }
+  });
+  comboOptions.forEach(function (opt, idx) {
+    opt.addEventListener('click', function () { selectWorkAuth(opt); });
+    opt.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        selectWorkAuth(opt);
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? idx + 1 : idx - 1;
+        if (next >= 0 && next < comboOptions.length) comboOptions[next].focus();
+      } else if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault();
+        comboOptions[e.key === 'Home' ? 0 : comboOptions.length - 1].focus();
+      } else if (e.key === 'Escape') {
+        setComboOpen(false);
+        comboTrigger.focus();
+      }
+    });
+  });
+  document.addEventListener('click', function (e) {
+    if (!document.getElementById('work-auth-combo').contains(e.target)) {
+      setComboOpen(false);
+    }
+  });
+
+  /* --------------------------- Validation --------------------------- */
+  function setError(inputEl, errId, bad) {
+    var err = document.getElementById(errId);
+    err.classList.toggle('visible', bad);
+    if (inputEl) {
+      if (bad) { inputEl.setAttribute('aria-invalid', 'true'); }
+      else { inputEl.removeAttribute('aria-invalid'); }
+    }
+    return bad;
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var failures = 0;
+
+    // Controlled input validates against internal state, not .value.
+    if (setError(firstNameEl, 'err-first-name', controlledState.firstName.trim() === '')) failures++;
+
+    var lastName = document.getElementById('last-name');
+    if (setError(lastName, 'err-last-name', lastName.value.trim() === '')) failures++;
+
+    var email = document.getElementById('email');
+    var emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim());
+    if (setError(email, 'err-email', !emailOk)) failures++;
+
+    var location = document.getElementById('location');
+    if (setError(location, 'err-location', location.value.trim() === '')) failures++;
+
+    if (setError(null, 'err-resume', resumeInput.files.length === 0)) failures++;
+
+    var exp = document.getElementById('experience');
+    var expVal = exp.value.trim();
+    var expBad = expVal === '' || isNaN(Number(expVal)) || Number(expVal) < 0 || Number(expVal) > 60;
+    if (setError(exp, 'err-experience', expBad)) failures++;
+
+    var country = document.getElementById('country');
+    if (setError(country, 'err-country', country.value === '')) failures++;
+
+    if (setError(comboTrigger, 'err-work-auth', workAuthValue === '')) failures++;
+
+    var workMode = form.querySelector('input[name="work_mode"]:checked');
+    if (setError(null, 'err-work-mode', !workMode)) failures++;
+
+    var why = document.getElementById('why-role');
+    if (setError(why, 'err-why-role', why.value.trim().length < 20)) failures++;
+
+    var consent = document.getElementById('consent');
+    if (setError(consent, 'err-consent', !consent.checked)) failures++;
+
+    if (failures > 0) {
+      summary.textContent = 'Please fix ' + failures + ' highlighted field' +
+        (failures === 1 ? '' : 's') + ' below and submit again.';
+      summary.classList.add('visible');
+      var firstBad = document.querySelector('.field-error.visible');
+      if (firstBad) { firstBad.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+      return;
+    }
+
+    // Success: replace the form with a confirmation panel.
+    var honeypotFilled = document.getElementById('middle-initial').value.trim() !== '';
+    var card = document.getElementById('application-card');
+    while (card.firstChild) { card.removeChild(card.firstChild); }
+
+    var panel = document.createElement('div');
+    panel.className = 'success-panel';
+
+    var check = document.createElement('div');
+    check.className = 'check';
+    check.textContent = '✓';
+    panel.appendChild(check);
+
+    var h2 = document.createElement('h2');
+    h2.textContent = 'Application submitted ✓';
+    panel.appendChild(h2);
+
+    var conf = document.createElement('p');
+    conf.className = 'conf';
+    conf.textContent = 'Confirmation #MOCK-1234 — thanks for applying to Northwind Robotics. ' +
+      'This is a local mock; nothing was sent anywhere.';
+    panel.appendChild(conf);
+
+    if (honeypotFilled) {
+      var warn = document.createElement('p');
+      warn.className = 'hp-warning';
+      warn.textContent = 'Honeypot tripped: the hidden "middle_initial" field was filled. ' +
+        'A real applicant would never see that field — a careful agent should leave it empty.';
+      panel.appendChild(warn);
+    }
+
+    card.appendChild(panel);
+    document.title = 'Application submitted — Northwind Robotics';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

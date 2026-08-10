@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock Workday — My Information</title>
+  <!--
+    A faithful reproduction of the Workday candidate "My Information" page, built
+    from the real DOM of autodesk.wd1.myworkdayjobs.com. Everything JobPilot keys
+    on is copied verbatim: data-automation-id values, the multiSelectContainer /
+    selectedItemList / selectedItem / promptOption structure, the
+    <button aria-haspopup="listbox"> single-select with its hidden value mirror,
+    and the emotion-style class names (css-xxxx) that make [class*=error] useless.
+
+    The three Workday behaviours that break naive automation are all simulated:
+      1. A prompt commits ONLY on focus loss (validation reads the committed value,
+         not input.value) — the "you have to click outside" trap.
+      2. The option popup is a PORTAL at the end of <body>, not a child of the field.
+      3. Clicking an already-selected option in a multiselect DESELECTS it.
+
+    The two popup shapes differ on purpose (one uses role=option, one only
+    data-automation-id=promptOption) so the content script cannot pass by relying
+    on either alone.
+  -->
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; }
+    .css-7t35fz { margin-bottom: 1rem; }
+    label { display: block; font-weight: 600; margin-bottom: .25rem; }
+    input[type=text] { width: 20rem; padding: .4rem; }
+    .css-1wmh1iu { width: 21rem; padding: .45rem; text-align: left; background: #fff; border: 1px solid #767676; }
+    .css-77hcv { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .css-dapbss { border: 1px solid #767676; width: 21rem; padding: .25rem; }
+    .css-1rwb1er { width: 100%; border: 0; outline: 0; }
+    [data-automation-id=selectedItemList] { list-style: none; margin: 0; padding: 0; display: flex; gap: .25rem; flex-wrap: wrap; }
+    [data-automation-id=selectedItem] { background: #eee; border-radius: 1rem; padding: .1rem .6rem; font-size: .85rem; }
+    [data-automation-id=errorMessage] { color: #b00; font-size: .85rem; margin-top: .2rem; }
+    .wd-popup { position: absolute; z-index: 10; background: #fff; border: 1px solid #999; box-shadow: 0 2px 8px rgba(0,0,0,.2); min-width: 21rem; }
+    .wd-popup ul { list-style: none; margin: 0; padding: 0; }
+    .wd-popup li, .wd-popup div[data-automation-id=promptOption] { padding: .4rem .6rem; cursor: pointer; }
+    .wd-popup li:hover, .wd-popup div[data-automation-id=promptOption]:hover { background: #eef; }
+  </style>
+</head>
+<body>
+<h3 class="css-1ylcaf3">My Information</h3>
+<form id="wd-form" novalidate>
+
+  <!-- Hierarchical multiselect: categories first, leaves only after you type. -->
+  <div data-automation-id="formField-source" class="css-7t35fz">
+    <label for="source--source">How Did You Hear About Us?<abbr class="css-1fc83zd">*</abbr></label>
+    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect" class="css-dapbss">
+      <div data-automation-id="multiselectInputContainer">
+        <input dir="ltr" placeholder="Search" aria-invalid="false" aria-required="true" autocomplete="off"
+               data-uxi-widget-type="selectinput" id="source--source" class="css-1rwb1er" value="">
+        <div data-automation-id="promptSelectionLabel"></div>
+        <ul role="listbox" data-automation-id="selectedItemList" aria-label="items selected"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Single-select prompt: a <button aria-haspopup="listbox"> plus a hidden value mirror. -->
+  <div data-automation-id="formField-country" class="css-7t35fz">
+    <label for="country--country">Country<abbr class="css-1fc83zd">*</abbr></label>
+    <div class="css-12zup1l">
+      <button aria-haspopup="listbox" type="button" value="c4f78be1" aria-label="Country India Required"
+              name="country" id="country--country" class="css-1wmh1iu">India</button>
+      <input type="text" class="css-77hcv" value="c4f78be1">
+    </div>
+  </div>
+
+  <!-- Same prompt, but with a validation icon rendered BETWEEN the button and its value
+       mirror — an adjacency-based mirror test would leak the internal id here. -->
+  <div data-automation-id="formField-countryRegion" class="css-7t35fz">
+    <label for="address--countryRegion">State</label>
+    <div class="css-12zup1l">
+      <button aria-haspopup="listbox" type="button" value="" aria-label="State Select One"
+              name="countryRegion" id="address--countryRegion" class="css-1wmh1iu">Select One</button>
+      <span class="css-invalid-icon" aria-hidden="true"></span>
+      <input type="text" class="css-77hcv" value="state-internal-id-9f2b">
+    </div>
+  </div>
+
+  <!-- isSecretEl matches "verification" as a bare substring, so this ordinary dropdown
+       gets flagged credential-ish. It must still get a ref and stay usable. -->
+  <div data-automation-id="formField-verificationMethod" class="css-7t35fz">
+    <label for="verificationMethod">How should we verify your identity?</label>
+    <div class="css-12zup1l">
+      <button aria-haspopup="listbox" type="button" value="" aria-label="Verification Method Select One"
+              name="verificationMethod" id="verificationMethod" class="css-1wmh1iu">Select One</button>
+      <input type="text" class="css-77hcv" value="">
+    </div>
+  </div>
+
+  <h4 id="Legal-Name-section">Legal Name</h4>
+  <div data-automation-id="formField-legalName--firstName" class="css-7t35fz">
+    <label for="name--legalName--firstName">Given Name(s)<abbr class="css-1fc83zd">*</abbr></label>
+    <input type="text" id="name--legalName--firstName" name="legalName--firstName" aria-required="true" class="css-uwygd9" value="">
+  </div>
+  <div data-automation-id="formField-legalName--middleName" class="css-7t35fz">
+    <label for="name--legalName--middleName">Middle Name</label>
+    <input type="text" id="name--legalName--middleName" name="legalName--middleName" class="css-uwygd9" value="">
+  </div>
+  <div data-automation-id="formField-legalName--lastName" class="css-7t35fz">
+    <label for="name--legalName--lastName">Family Name</label>
+    <input type="text" id="name--legalName--lastName" name="legalName--lastName" class="css-uwygd9" value="">
+  </div>
+
+  <h4 id="Address-section">Address</h4>
+  <div data-automation-id="formField-addressLine1" class="css-7t35fz">
+    <label for="address--addressLine1">Address Line 1<abbr class="css-1fc83zd">*</abbr></label>
+    <input type="text" id="address--addressLine1" name="addressLine1" aria-required="true" class="css-uwygd9" value="">
+  </div>
+  <div data-automation-id="formField-city" class="css-7t35fz">
+    <label for="address--city">City<abbr class="css-1fc83zd">*</abbr></label>
+    <input type="text" id="address--city" name="city" aria-required="true" class="css-uwygd9" value="">
+  </div>
+  <div data-automation-id="formField-postalCode" class="css-7t35fz">
+    <label for="address--postalCode">Postal Code<abbr class="css-1fc83zd">*</abbr></label>
+    <input type="text" id="address--postalCode" name="postalCode" aria-required="true" class="css-uwygd9" value="">
+  </div>
+
+  <h4 id="Phone-section">Phone</h4>
+  <div data-automation-id="formField-phoneType" class="css-7t35fz">
+    <label for="phoneNumber--phoneType">Phone Device Type<abbr class="css-1fc83zd">*</abbr></label>
+    <div class="css-12zup1l">
+      <button aria-haspopup="listbox" type="button" value="" aria-label="Phone Device Type Select One Required"
+              name="phoneType" id="phoneNumber--phoneType" class="css-1wmh1iu">Select One</button>
+      <input type="text" class="css-77hcv" value="">
+    </div>
+  </div>
+
+  <!-- Pre-selected multiselect: choosing "India (+91)" again must NOT toggle it off. -->
+  <div data-automation-id="formField-countryPhoneCode" class="css-7t35fz">
+    <label for="phoneNumber--countryPhoneCode">Country Phone Code<abbr class="css-1fc83zd">*</abbr></label>
+    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect" class="css-dapbss">
+      <div data-automation-id="multiselectInputContainer">
+        <input dir="ltr" placeholder="Search" aria-invalid="false" aria-required="true" autocomplete="off"
+               data-uxi-widget-type="selectinput" id="phoneNumber--countryPhoneCode" class="css-1rwb1er" value="">
+        <ul role="listbox" data-automation-id="selectedItemList" aria-label="items selected">
+          <li role="presentation" data-automation-id="menuItem">
+            <div aria-selected="true" role="option" data-automation-id="selectedItem" title="India (+91)">
+              <div data-automation-id="DELETE_charm" role="presentation" aria-hidden="true"></div>
+              <p data-automation-id="promptOption" data-automation-label="India (+91)">India (+91)</p>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div data-automation-id="formField-phoneNumber" class="css-7t35fz">
+    <label for="phoneNumber--phoneNumber">Phone Number<abbr class="css-1fc83zd">*</abbr></label>
+    <input type="text" id="phoneNumber--phoneNumber" name="phoneNumber" aria-required="true" class="css-uwygd9" value="">
+  </div>
+  <!-- autocomplete="tel" on an EXTENSION box: real forms mislabel like this, and the
+       autocomplete fast path used to hand the phone number straight to it. -->
+  <div data-automation-id="formField-extension" class="css-7t35fz">
+    <label for="phoneNumber--extension">Phone Extension</label>
+    <input type="text" id="phoneNumber--extension" name="extension" autocomplete="tel" class="css-uwygd9" value="">
+  </div>
+
+  <!-- A multiselect whose options ignore clicks, pre-seeded with a pill that CONTAINS
+       the label we will ask for ("Guinea" ⊂ "Guinea-Bissau"). A containment-based
+       verification would let the existing pill vouch for a pick that never landed. -->
+  <div data-automation-id="formField-citizenship" class="css-7t35fz">
+    <label for="citizenship--citizenship">Country of Citizenship</label>
+    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect" class="css-dapbss">
+      <div data-automation-id="multiselectInputContainer">
+        <input placeholder="Search" autocomplete="off" data-uxi-widget-type="selectinput"
+               id="citizenship--citizenship" class="css-1rwb1er" value="">
+        <ul role="listbox" data-automation-id="selectedItemList" aria-label="items selected">
+          <li role="presentation" data-automation-id="menuItem">
+            <div role="option" aria-selected="true" data-automation-id="selectedItem" title="Guinea-Bissau">
+              <p data-automation-id="promptOption" data-automation-label="Guinea-Bissau">Guinea-Bissau</p>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div data-automation-id="pageFooter">
+    <button class="css-a0feql" type="button" data-automation-id="pageFooterNextButton">Save and Continue</button>
+  </div>
+</form>
+
+<script>
+  // --- Workday behaviour 1: a value is COMMITTED only when the field loses focus.
+  // Validation reads the committed store, never input.value. This is the trap the
+  // user reported: fill the box, never blur, and Workday still calls it empty.
+  //
+  // ONLY focus loss commits. An earlier cut of this mock also committed on `change`,
+  // which quietly defeated the whole point: setTextRaw fires a change the instant it
+  // writes the value, so every field committed before it was ever blurred and the blur
+  // path — the one thing this behaviour exists to test — was never exercised at all.
+  const committed = new Map();
+  // The event tape, so a test can assert the ORDER a fill produces and not merely its
+  // end state. "focus evaporated" and "focus landed somewhere else" leave the same
+  // activeElement behind and are told apart only here.
+  window.__events = [];
+  for (const input of document.querySelectorAll('input.css-uwygd9')) {
+    committed.set(input.id, '');
+    const tape = (e) => window.__events.push({
+      id: input.id,
+      type: e.type,
+      related: e.relatedTarget ? (e.relatedTarget.tagName || '').toLowerCase() : null,
+    });
+    input.addEventListener('input', tape);
+    input.addEventListener('change', tape);
+    input.addEventListener('focusout', (e) => { tape(e); committed.set(input.id, input.value); });
+  }
+  document.addEventListener('focusin', (e) => {
+    window.__events.push({ id: null, type: 'focusin', target: (e.target.tagName || '').toLowerCase() });
+  });
+
+  const SOURCES = {
+    'Job Boards': ['LinkedIn', 'Indeed', 'Glassdoor'],
+    'Company Website': ['Autodesk Careers', 'Autodesk Blog'],
+    'Referral': ['Employee Referral'],
+  };
+  const OPTIONS = {
+    'country--country': ['India', 'United States of America', 'United Kingdom'],
+    'address--countryRegion': ['Karnataka', 'Maharashtra', 'Delhi'],
+    'phoneNumber--phoneType': ['Mobile', 'Home', 'Work'],
+    'verificationMethod': ['Email', 'Text message'],
+  };
+  const PHONE_CODES = ['India (+91)', 'United States of America (+1)', 'United Kingdom (+44)'];
+
+  let popup = null;
+  function closePopup() { if (popup) { popup.remove(); popup = null; } }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePopup(); });
+
+  /** Popup shape A (single-select): portal at end of <body>, real role=option items. */
+  function openButtonPrompt(button) {
+    closePopup();
+    popup = document.createElement('div');
+    popup.className = 'wd-popup';
+    popup.setAttribute('data-automation-id', 'activeListContainer');
+    const ul = document.createElement('ul');
+    ul.setAttribute('role', 'listbox');
+    for (const label of OPTIONS[button.id] || []) {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.setAttribute('data-automation-id', 'promptOption');
+      li.setAttribute('data-automation-label', label);
+      li.textContent = label;
+      li.addEventListener('click', () => {
+        button.textContent = label;                       // the button IS the value display
+        button.nextElementSibling.value = 'id-' + label;  // hidden mirror
+        committed.set(button.id, label);
+        closePopup();
+      });
+      ul.appendChild(li);
+    }
+    popup.appendChild(ul);
+    document.body.appendChild(popup); // portal — NOT inside the field
+  }
+
+  /** Popup shape B (multiselect): NO role=option at all — only data-automation-id. */
+  function openMultiselect(input, items) {
+    closePopup();
+    popup = document.createElement('div');
+    popup.className = 'wd-popup';
+    popup.setAttribute('data-automation-id', 'activeListContainer');
+    for (const item of items) {
+      const div = document.createElement('div');
+      div.setAttribute('data-automation-id', item.leaf ? 'promptLeafNode' : 'promptOption');
+      div.setAttribute('data-automation-label', item.label);
+      div.textContent = item.label;
+      div.addEventListener('click', () => item.onPick());
+      popup.appendChild(div);
+    }
+    document.body.appendChild(popup);
+  }
+
+  function pillsOf(container) {
+    return Array.from(container.querySelectorAll('[data-automation-id=selectedItem]'));
+  }
+  function addPill(container, label) {
+    const list = container.querySelector('[data-automation-id=selectedItemList]');
+    // Workday behaviour 3: picking an already-chosen value REMOVES it.
+    const existing = pillsOf(container).find((p) => p.getAttribute('title') === label);
+    if (existing) { existing.closest('li').remove(); closePopup(); return; }
+    const li = document.createElement('li');
+    li.setAttribute('role', 'presentation');
+    li.setAttribute('data-automation-id', 'menuItem');
+    const item = document.createElement('div');
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', 'true');
+    item.setAttribute('data-automation-id', 'selectedItem');
+    item.setAttribute('title', label);
+    const p = document.createElement('p');
+    p.setAttribute('data-automation-id', 'promptOption');
+    p.setAttribute('data-automation-label', label);
+    p.textContent = label;
+    item.appendChild(p);
+    li.appendChild(item);
+    list.appendChild(li);
+    closePopup();
+  }
+
+  // "How Did You Hear About Us?" — categories until you type, leaves after.
+  const sourceInput = document.getElementById('source--source');
+  const sourceBox = sourceInput.closest('[data-automation-id=multiSelectContainer]');
+  function renderSource() {
+    const q = sourceInput.value.trim().toLowerCase();
+    let items;
+    if (!q) {
+      items = Object.keys(SOURCES).map((cat) => ({ label: cat, leaf: false, onPick: () => {} }));
+    } else {
+      const leaves = Object.values(SOURCES).flat().filter((l) => l.toLowerCase().includes(q));
+      items = leaves.map((l) => ({ label: l, leaf: true, onPick: () => addPill(sourceBox, l) }));
+    }
+    // The option list arrives over the network on the real thing.
+    setTimeout(() => { if (document.activeElement === sourceInput) openMultiselect(sourceInput, items); }, 150);
+  }
+  sourceInput.addEventListener('click', renderSource);
+  sourceInput.addEventListener('input', renderSource);
+
+  // Country Phone Code — flat searchable list, starts with a pill already chosen.
+  const codeInput = document.getElementById('phoneNumber--countryPhoneCode');
+  const codeBox = codeInput.closest('[data-automation-id=multiSelectContainer]');
+  function renderCodes() {
+    const q = codeInput.value.trim().toLowerCase();
+    const items = PHONE_CODES.filter((c) => !q || c.toLowerCase().includes(q))
+      .map((c) => ({ label: c, leaf: true, onPick: () => addPill(codeBox, c) }));
+    setTimeout(() => { if (document.activeElement === codeInput) openMultiselect(codeInput, items); }, 150);
+  }
+  codeInput.addEventListener('click', renderCodes);
+  codeInput.addEventListener('input', renderCodes);
+
+  for (const button of document.querySelectorAll('button[aria-haspopup=listbox]')) {
+    button.addEventListener('click', () => openButtonPrompt(button));
+  }
+
+  // Country of Citizenship: the list renders, but picking an option does NOTHING —
+  // a broken/unwired widget. choose_option must report that honestly and must not
+  // let the pre-existing "Guinea-Bissau" pill stand in as proof of success.
+  const citizenInput = document.getElementById('citizenship--citizenship');
+  function renderCitizenship() {
+    const q = citizenInput.value.trim().toLowerCase();
+    const items = ['Guinea', 'Guinea-Bissau', 'Equatorial Guinea', 'India']
+      .filter((c) => !q || c.toLowerCase().includes(q))
+      .map((c) => ({ label: c, leaf: true, onPick: () => { /* deliberately inert */ } }));
+    setTimeout(() => { if (document.activeElement === citizenInput) openMultiselect(citizenInput, items); }, 150);
+  }
+  citizenInput.addEventListener('click', renderCitizenship);
+  citizenInput.addEventListener('input', renderCitizenship);
+
+  // Validation: required fields read the COMMITTED value; prompts read their real
+  // widget state. Errors render as [data-automation-id=errorMessage] — no "error"
+  // class anywhere, exactly like the real thing.
+  document.querySelector('[data-automation-id=pageFooterNextButton]').addEventListener('click', () => {
+    for (const old of document.querySelectorAll('[data-automation-id=errorMessage]')) old.remove();
+    const fail = (field, msg) => {
+      const div = document.createElement('div');
+      div.setAttribute('data-automation-id', 'errorMessage');
+      div.textContent = msg;
+      document.querySelector(`[data-automation-id="formField-${field}"]`).appendChild(div);
+    };
+    for (const [field, id] of [
+      ['legalName--firstName', 'name--legalName--firstName'],
+      ['addressLine1', 'address--addressLine1'],
+      ['city', 'address--city'],
+      ['postalCode', 'address--postalCode'],
+      ['phoneNumber', 'phoneNumber--phoneNumber'],
+    ]) {
+      if (!committed.get(id)) fail(field, 'Error: This field is required.');
+    }
+    if (!pillsOf(sourceBox).length) fail('source', 'Error: Select at least one option.');
+    if (!committed.get('phoneNumber--phoneType')) fail('phoneType', 'Error: This field is required.');
+  });
+</script>
+</body>
+</html>

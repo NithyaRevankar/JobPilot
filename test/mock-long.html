@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Long Application — CONTRACT-V8 fixture</title>
+<!--
+  A page that is too big for one read_page, which is the ordinary case on a job
+  board or a careers site with a fat footer — not an exotic one.
+
+  The shape that matters: #referral-code sits AFTER a 420-row "related roles" list,
+  each row carrying a Save button, so it falls past read_page's 400-element cap and
+  is genuinely absent from the inventory. Re-reading returns the identical truncated
+  list, so before V8 there was no way to reach it at all.
+
+  The rows use BUTTONS, not links, because read_page already deprioritises plain
+  links (MAX_LINKS) — 460 links would have been harmless. It is per-row controls
+  that crowd a page out, which is exactly what a job board's Save/Apply column is.
+
+  #reveal mutates the page in the three ways a diff has to tell apart: it ADDS two
+  fields, CHANGES one existing value, and REMOVES a button.
+-->
+<style>
+  body { font: 14px system-ui; padding: 20px; max-width: 900px; }
+  fieldset { margin: 16px 0; padding: 12px 16px; }
+  legend { font-weight: 700; }
+  label { display: block; font-weight: 600; margin: 10px 0 3px; }
+  input, select, textarea { padding: 5px; width: 280px; }
+  #filler { margin: 20px 0; columns: 4; font-size: 12px; }
+  #filler a { display: block; }
+</style>
+
+<h1>Senior Engineer — Application</h1>
+
+<fieldset id="sec-personal">
+  <legend>Personal details</legend>
+  <label for="first">First name</label>
+  <input id="first" name="first" type="text">
+  <label for="last">Last name</label>
+  <input id="last" name="last" type="text">
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email">
+</fieldset>
+
+<fieldset id="sec-experience">
+  <legend>Experience</legend>
+  <label for="years">Years of experience</label>
+  <input id="years" name="years" type="text">
+  <label for="current">Current employer</label>
+  <input id="current" name="current" type="text">
+  <label for="notice">Notice period</label>
+  <select id="notice" name="notice">
+    <option value="">Select one</option>
+    <option>Immediate</option>
+    <option>30 days</option>
+    <option>90 days</option>
+  </select>
+</fieldset>
+
+<!--
+  Two controls sharing the name "Continue": the role filter has to tell them apart,
+  because a wizard's Continue button and a "Continue where you left off" field is a
+  real collision on multi-step portals.
+-->
+<fieldset id="sec-progress">
+  <legend>Saved progress</legend>
+  <label for="continue-token">Continue</label>
+  <input id="continue-token" name="continueToken" type="text">
+  <button id="continue-btn" type="button">Continue</button>
+  <button id="reveal" type="button">Reveal extra questions</button>
+  <button id="self-destruct" type="button">Discard draft</button>
+</fieldset>
+
+<div id="extra"></div>
+
+<div id="filler"></div>
+
+<!-- Past the cap. This is the needle. -->
+<fieldset id="sec-referral">
+  <legend>Referral</legend>
+  <label for="referral-code">Referral code</label>
+  <input id="referral-code" name="referralCode" type="text">
+</fieldset>
+
+<script>
+  // 420 rows, each with a Save button: enough to push everything after them past
+  // MAX_ELEMENT_LINES (400).
+  const filler = document.getElementById('filler');
+  for (let i = 1; i <= 420; i++) {
+    const row = document.createElement('div');
+    const a = document.createElement('a');
+    a.href = '#job-' + i;
+    a.textContent = 'Related role #' + i;
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.textContent = 'Save role #' + i;
+    row.append(a, save);
+    filler.appendChild(row);
+  }
+
+  // The three kinds of change a diff must distinguish.
+  document.getElementById('reveal').addEventListener('click', () => {
+    const extra = document.getElementById('extra');
+    if (extra.children.length) return;
+    extra.innerHTML =
+      '<fieldset id="sec-extra"><legend>Extra questions</legend>' +
+      '<label for="visa">Visa status</label><input id="visa" name="visa" type="text">' +
+      '<label for="relocate">Willing to relocate</label>' +
+      '<select id="relocate" name="relocate"><option value="">Select one</option><option>Yes</option><option>No</option></select>' +
+      '</fieldset>';
+    document.getElementById('years').value = '9';          // CHANGED
+    document.getElementById('self-destruct').remove();     // GONE
+  });
+
+  document.getElementById('self-destruct').addEventListener('click', function () { this.remove(); });
+</script>

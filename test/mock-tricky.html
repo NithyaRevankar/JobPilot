@@ -1,0 +1,246 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Tricky Controls — CONTRACT-V7 fixture</title>
+<!--
+  Six controls that DEFEAT the recipe tools, reproduced from real portals:
+
+  1. #cc-trigger  a prompt button that opens on MOUSEDOWN and whose option list is
+                  portalled to <body> as plain <div class="opt"> — no role=option, no
+                  aria-controls. choose_option opens native controls with .click(), which
+                  emits no mouse events at all, so the list never appears; and even when
+                  it does, nothing in it looks like an option. (Workday/React portals.)
+  2. #kb-input    a combobox whose list does not exist until ArrowDown, and which only
+                  commits on Enter. Nothing to click, so clicking finds nothing.
+  3. #hp          an off-screen honeypot. read_page never shows it; V7 is the first
+                  feature that could aim at it, so V7 must refuse to touch it.
+  4. #pw          a password box. dom_act must never type into it.
+  5. <x-field>    a form field inside an OPEN shadow root, the way a web-component
+                  portal (Salesforce/LWC, Vaadin, Phenom) builds every field.
+                  document.querySelectorAll does not cross that boundary, so before
+                  V7 §7 this page read as though the field did not exist.
+  6. #cookie-bar  a banner covering #submit-btn. The click IS delivered and the page
+                  DOES take it — it just lands on the banner. The classic silent
+                  success. Hidden until you press "Simulate cookie banner".
+
+  #src-trigger is the well-behaved control for contrast: it DECLARES its list via
+  aria-controls, which is what inspect_dom's RELATED section is for.
+-->
+<style>
+  body { font: 14px system-ui; padding: 20px; }
+  .field { margin: 14px 0; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; }
+  .trigger {
+    border: 1px solid #888; border-radius: 4px; padding: 6px 10px;
+    width: 260px; cursor: pointer; user-select: none; background: #fff;
+  }
+  #portal {
+    position: absolute; display: none; background: #fff; border: 1px solid #444;
+    box-shadow: 0 2px 8px rgba(0,0,0,.2); z-index: 50; width: 260px;
+  }
+  #portal .opt { padding: 6px 10px; cursor: pointer; }
+  #portal .opt:hover { background: #eef; }
+  #kb-list { display: none; border: 1px solid #888; width: 260px; margin: 0; padding: 0; list-style: none; }
+  #kb-list li { padding: 6px 10px; }
+  #kb-list li.active { background: #dde; }
+  #hp { position: absolute; left: -9999px; top: -9999px; }
+  #cookie-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 999;
+    background: #222; color: #fff; padding: 26px 16px;
+    display: flex; gap: 12px; align-items: center;
+  }
+  /* `display:flex` above beats the UA's `[hidden]{display:none}`, so say it again. */
+  #cookie-bar[hidden] { display: none; }
+  #submit-btn { position: fixed; bottom: 22px; left: 24px; z-index: 1; padding: 6px 14px; }
+  .hidden-wrap { }
+  .err { color: #b00; }
+</style>
+
+<h1>Application</h1>
+
+<!-- 1. portalled, role-less, mousedown-driven -->
+<div class="field" data-automation-id="formField-countryPhoneCode">
+  <label id="cc-label" for="cc-trigger">Country Phone Code*</label>
+  <button id="cc-trigger" class="trigger" type="button"
+          data-automation-id="promptTrigger" aria-haspopup="listbox" aria-expanded="false">
+    <span id="cc-value">Select One</span>
+  </button>
+</div>
+
+<!-- keyboard-only combobox -->
+<div class="field">
+  <label for="kb-input">City*</label>
+  <input id="kb-input" class="trigger" role="combobox" aria-expanded="false"
+         autocomplete="off" placeholder="Press ↓">
+  <ul id="kb-list"></ul>
+</div>
+
+<!-- the well-behaved one: it declares its list -->
+<div class="field">
+  <label for="src-trigger">How Did You Hear About Us?</label>
+  <div id="src-trigger" class="trigger" role="button" tabindex="0"
+       aria-controls="src-list" aria-expanded="false">Select One</div>
+  <ul id="src-list" role="listbox" hidden>
+    <li role="option">Job Board</li>
+    <li role="option">Referral</li>
+  </ul>
+</div>
+
+<div class="field">
+  <label for="pw">Password</label>
+  <input id="pw" type="password" name="password" autocomplete="current-password">
+</div>
+
+<div class="field" aria-hidden="true">
+  <label for="aria-hidden-name">Leave blank</label>
+  <input id="aria-hidden-name" type="text" name="nickname">
+</div>
+
+<input id="hp" type="text" name="website" tabindex="-1" autocomplete="off">
+
+<div class="field">
+  <label for="notes">Notes</label>
+  <textarea id="notes" name="notes" rows="2" cols="40"></textarea>
+</div>
+
+<!-- a whole field living inside an open shadow root -->
+<div class="field">
+  <x-field id="shadow-field"></x-field>
+</div>
+
+<div id="errors"></div>
+
+<button id="show-cookie" type="button">Simulate cookie banner</button>
+<button id="submit-btn" type="button">Submit application</button>
+<div id="submit-status"></div>
+
+<div id="cookie-bar" hidden>
+  <span>We use cookies to make this form worse.</span>
+  <button id="cookie-accept" type="button">Accept</button>
+</div>
+
+<div id="portal"></div>
+
+<script>
+  // ---- 1. the portalled prompt: opens on MOUSEDOWN, options carry no role -------
+  const CODES = ['India (+91)', 'United States (+1)', 'Germany (+49)'];
+  const portal = document.getElementById('portal');
+  const ccTrigger = document.getElementById('cc-trigger');
+  const ccValue = document.getElementById('cc-value');
+
+  function openPortal() {
+    portal.innerHTML = '';
+    for (const code of CODES) {
+      const opt = document.createElement('div');
+      opt.className = 'opt';
+      opt.textContent = code;          // no role, no data-value, no aria anything
+      opt.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        ccValue.textContent = code;
+        closePortal();
+      });
+      portal.appendChild(opt);
+    }
+    const r = ccTrigger.getBoundingClientRect();
+    portal.style.left = (r.left + window.scrollX) + 'px';
+    portal.style.top = (r.bottom + window.scrollY) + 'px';
+    portal.style.display = 'block';
+    ccTrigger.setAttribute('aria-expanded', 'true');
+  }
+  function closePortal() {
+    portal.style.display = 'none';
+    ccTrigger.setAttribute('aria-expanded', 'false');
+  }
+  // MOUSEDOWN only — a plain .click() never opens this.
+  ccTrigger.addEventListener('mousedown', () => {
+    if (portal.style.display === 'block') closePortal(); else openPortal();
+  });
+
+  // ---- 2. keyboard-only combobox ------------------------------------------------
+  const CITIES = ['Bengaluru', 'Hyderabad', 'Pune'];
+  const kbInput = document.getElementById('kb-input');
+  const kbList = document.getElementById('kb-list');
+  let kbOpen = false;
+  let kbIndex = -1;
+
+  function renderKb() {
+    kbList.innerHTML = '';
+    CITIES.forEach((city, i) => {
+      const li = document.createElement('li');
+      li.textContent = city;
+      if (i === kbIndex) li.className = 'active';
+      kbList.appendChild(li);
+    });
+    kbList.style.display = kbOpen ? 'block' : 'none';
+    kbInput.setAttribute('aria-expanded', String(kbOpen));
+  }
+  kbInput.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      if (!kbOpen) { kbOpen = true; kbIndex = 0; } else { kbIndex = Math.min(kbIndex + 1, CITIES.length - 1); }
+      renderKb();
+    } else if (e.key === 'ArrowUp') {
+      kbIndex = Math.max(kbIndex - 1, 0);
+      renderKb();
+    } else if (e.key === 'Enter') {
+      if (kbOpen && kbIndex >= 0) {
+        kbInput.value = CITIES[kbIndex];
+        kbOpen = false;
+        renderKb();
+        kbInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } else if (e.key === 'Escape') {
+      kbOpen = false;
+      renderKb();
+    }
+  });
+  // Clicking does NOTHING — this control is keyboard-only, which is the point.
+
+  // ---- 3. the well-behaved one --------------------------------------------------
+  const srcTrigger = document.getElementById('src-trigger');
+  const srcList = document.getElementById('src-list');
+  srcTrigger.addEventListener('click', () => {
+    const open = !srcList.hidden;
+    srcList.hidden = open;
+    srcTrigger.setAttribute('aria-expanded', String(!open));
+  });
+  srcList.addEventListener('click', (e) => {
+    if (e.target.matches('[role=option]')) {
+      srcTrigger.textContent = e.target.textContent;
+      srcList.hidden = true;
+      srcTrigger.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  // ---- 5. a field inside an OPEN shadow root ------------------------------------
+  class XField extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: 'open' });
+      root.innerHTML =
+        '<style>label{display:block;font-weight:600;margin-bottom:4px}' +
+        'input{padding:6px;width:250px}</style>' +
+        '<label for="inner">Preferred Name*</label>' +
+        '<input id="inner" name="preferredName" type="text">' +
+        '<button id="inner-btn" type="button">Verify</button>' +
+        '<span id="inner-status"></span>';
+      root.getElementById('inner-btn').addEventListener('click', () => {
+        root.getElementById('inner-status').textContent = 'verified:' + root.getElementById('inner').value;
+      });
+    }
+  }
+  customElements.define('x-field', XField);
+
+  // ---- 6. the banner that eats a click ------------------------------------------
+  const bar = document.getElementById('cookie-bar');
+  document.getElementById('show-cookie').addEventListener('click', () => { bar.hidden = false; });
+  document.getElementById('cookie-accept').addEventListener('click', () => { bar.remove(); });
+  document.getElementById('submit-btn').addEventListener('click', () => {
+    document.getElementById('submit-status').textContent = 'submitted';
+  });
+
+  // A honeypot that was filled means a bot filled it.
+  window.__honeypotFilled = () => document.getElementById('hp').value;
+  window.__shadow = (sel) => {
+    const root = document.getElementById('shadow-field').shadowRoot;
+    const el = root.querySelector(sel);
+    return el ? (el.value !== undefined ? el.value : el.textContent) : null;
+  };
+</script>
