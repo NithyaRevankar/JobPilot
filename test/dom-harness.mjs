@@ -40,8 +40,19 @@ const ccRef = refOf(inv, /Country Phone Code/i);
 const kbRef = refOf(inv, /label="City\*"/i);
 check('read_page found the tricky controls', Boolean(ccRef && kbRef), `${ccRef} ${kbRef}`);
 
-check('read_page never showed the honeypot or the aria-hidden field (§3.1 premise)',
-  !/"website"/.test(inv) && !/nickname/.test(inv));
+// CONTRACT CHANGE. §3.1 originally hid EVERYTHING aria-hidden. Then SAP UI5 shipped its
+// consent switch aria-hidden, and P&I LOGA marked its entire live form table aria-hidden —
+// real applications became invisible. The rule is now paint-based: the off-screen honeypot
+// stays hidden (it is invisible to real users — that is what makes it a trap), while a
+// VISIBLY PAINTED aria-hidden control is listed WITH a flag, so the model can still honor
+// this one's label — which literally says "Leave blank".
+check('read_page never shows the off-screen honeypot (§3.1, paint-based)',
+  !/"website"/.test(inv));
+check('...but a VISIBLY PAINTED aria-hidden field is listed and flagged — P&I LOGA marks ' +
+  'its whole live form aria-hidden, and hiding it made real applications unfillable',
+  /nickname|Leave blank/.test(inv)
+  && /\(aria-hidden\)/.test(inv.split('\n').find((l) => /nickname|Leave blank/.test(l)) || ''),
+  (inv.split('\n').find((l) => /nickname|Leave blank/.test(l)) || '(absent)').slice(0, 100));
 
 // ------------------------------------------------------------ §9.3 inspect_dom
 r = await exec('inspect_dom', { ref: ccRef });
@@ -142,8 +153,9 @@ check('§9.7 an acting op refuses an off-screen honeypot',
 check('...and the honeypot stays empty', hpValue === '', `"${hpValue}"`);
 
 r = await act([{ op: 'click', selector: '#aria-hidden-name' }]);
-check('...and an aria-hidden control is refused too',
-  !r.ok && /not visible to a user/.test(r.error || ''), (r.error || '').slice(0, 90));
+check('...while a PAINTED aria-hidden control is operable — the LOGA form is one giant ' +
+  'aria-hidden table, and refusing it refused the whole application',
+  r.ok, (r.result || r.error || '').slice(0, 90));
 
 r = await act([{ op: 'read', selector: '#hp' }]);
 check('...but read may still LOOK at it, and says it is not visible (looking is not touching)',

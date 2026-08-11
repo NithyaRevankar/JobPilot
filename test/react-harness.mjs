@@ -285,9 +285,9 @@ const seedChat = [
   const { page, errors } = await openPanel({ seed: { chatHistory: seedChat } });
 
   check('the panel boots with no uncaught error', errors.length === 0, errors.slice(0, 2).join(' | '));
-  check('...and paints the shell: header, five tabs, five view slots',
-    (await page.locator('#app .tabbar .tab').count()) === 5
-    && (await page.locator('#app section.view').count()) === 5,
+  check('...and paints the shell: header, six tabs, six view slots',
+    (await page.locator('#app .tabbar .tab').count()) === 6
+    && (await page.locator('#app section.view').count()) === 6,
     `${await page.locator('#app .tabbar .tab').count()} tabs`);
   check('chat is the tab you land on', await page.locator('#view-chat').evaluate((el) => el.classList.contains('active')));
 
@@ -759,6 +759,526 @@ const seedChat = [
   }
   check('no uncaught error across three concurrent streams', errors.length === 0,
     errors.slice(0, 2).join(' | '));
+  await page.close();
+}
+
+// ================================================ CONTRACT-V11 — the plan card, for real
+//
+// panel-harness proves the LOGIC: what an unticked row means, which value reaches the page.
+// None of that touches the dialog. This drives the actual card in a real browser, because
+// the two things that can only fail here are the two that matter most: the checkbox the
+// user clicks has to be the row they were reading, and the box they typed a correction into
+// has to be the value that gets typed into their job application. A positional bug between
+// `rows` and `values` passes every unit test and puts the wrong answer on a real form.
+{
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+
+  await page.addInitScript(() => {
+    const store = {
+      settings: { provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', planMode: 'ask' },
+      profile: { fullName: 'Jane Doe', phone: '555-0100' },
+    };
+    const tab = { id: 11, title: 'Job', url: 'https://jobs.example/a', status: 'complete', windowId: 9 };
+    // Every fill the panel dispatches, in order — this is what the assertions read.
+    window.__filled = [];
+    window.chrome = {
+      runtime: {
+        id: 't', getURL: (p) => `chrome-extension://t/${p}`,
+        sendMessage: async () => ({ ok: true }),
+        onMessage: { addListener() {}, removeListener() {} },
+        lastError: null,
+      },
+      storage: {
+        local: {
+          async get(key) {
+            if (key == null) return { ...store };
+            if (Array.isArray(key)) return Object.fromEntries(key.filter((k) => k in store).map((k) => [k, store[k]]));
+            return key in store ? { [key]: store[key] } : {};
+          },
+          async set(obj) { Object.assign(store, obj); },
+          async remove(key) { for (const k of (Array.isArray(key) ? key : [key])) delete store[k]; },
+          async clear() { for (const k of Object.keys(store)) delete store[k]; },
+        },
+        session: { async get() { return {}; }, async set() {}, async remove() {} },
+      },
+      tabs: {
+        async query() { return [tab]; },
+        async get(id) { if (id === 11) return tab; throw new Error('no tab'); },
+        async sendMessage(id, msg) {
+          if (msg && msg.kind === 'jobpilot:ping') return { ok: true, ready: true };
+          if (msg && msg.kind === 'jobpilot:exec') {
+            window.__filled.push({ tool: msg.tool, ...msg.args });
+            return { ok: true, result: `Filled ${msg.args.ref}.` };
+          }
+          return { ok: true };
+        },
+        async update() {},
+        onCreated: { addListener() {}, removeListener() {} },
+        onUpdated: { addListener() {}, removeListener() {} },
+        onRemoved: { addListener() {}, removeListener() {} },
+        onReplaced: { addListener() {}, removeListener() {} },
+      },
+      webNavigation: { async getAllFrames() { return [{ frameId: 0, url: 'https://jobs.example/a' }]; } },
+      scripting: { async executeScript() { return []; } },
+    };
+
+    const enc = new TextEncoder();
+    const sse = (events) => new Response(
+      new ReadableStream({
+        start(c) {
+          for (const e of events) c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n`));
+          c.enqueue(enc.encode('data: [DONE]\n'));
+          c.close();
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+    const tool = (id, name, args) => ({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] });
+    const rounds = [
+      [tool('p1', 'propose_plan', {
+        fills: [
+          { ref: 'e1', label: 'Full name', value: 'Jane Doe' },
+          { ref: 'e2', label: 'Phone', value: '555-0100' },
+          { ref: 'e3', label: 'Why this company?', value: 'A sentence the model composed.' },
+        ],
+        unknowns: [{ question: 'Preferred start date?' }],
+      })],
+      [tool('p2', 'done', { status: 'ready_for_review', summary: 'filled' })],
+    ];
+    window.fetch = async () => sse(rounds.shift() || []);
+  });
+
+  await page.goto(`${ORIGIN}/sidepanel/panel.html`);
+  await page.waitForSelector('#view-chat .composer-input', { timeout: 10000 });
+
+  const box = page.locator('.run-slot').first().locator('.composer-input');
+  await box.fill('apply to this job');
+  await box.press('Enter');
+
+  await page.waitForSelector('#dlg-ask[open] .modal-plan', { timeout: 10000 });
+
+  const rows = page.locator('#dlg-ask .plan-row');
+  check('V11 the plan card renders one row per field the agent means to enter',
+    (await rows.count()) === 3, `${await rows.count()} rows`);
+
+  const chips = await page.locator('#dlg-ask .plan-src').allInnerTexts();
+  check('...each row says where its value came from',
+    /profile/.test(chips[0]) && /profile/.test(chips[1]), chips.join(' | '));
+  check('THE POINT: the one value the profile does not back is the one marked — that chip ' +
+    'is how a user decides which of twenty rows to actually read',
+    (await page.locator('#dlg-ask .plan-src-inferred').count()) === 1
+    && /worked out/i.test(chips[2]),
+    chips.join(' | '));
+
+  check('...and the question the agent could not answer is in the SAME card, not a second one',
+    (await page.locator('#dlg-ask .modal-field').count()) === 2
+    && /Preferred start date/.test(await page.locator('#dlg-ask .modal-body').innerText()));
+  const submit = page.locator('#dlg-ask .modal-submit');
+  check('...the primary button says what it will do, not "Submit"',
+    /Fill 3 fields/.test(await submit.innerText()), await submit.innerText());
+  check('...and focus opens IN the card, not on its primary button — a review card that ' +
+    'hands you "approve everything" one Enter away is not a review',
+    await page.evaluate(() => {
+      const a = document.activeElement;
+      return Boolean(a && a.type === 'checkbox' && a.closest('.plan-row'));
+    }),
+    await page.evaluate(() => `${document.activeElement && document.activeElement.className}`));
+
+  // Untick the phone row; correct the composed sentence; answer the question.
+  await rows.nth(1).locator('input[type=checkbox]').uncheck();
+  // Case-insensitive: .modal-label uppercases via CSS and innerText reports what is
+  // RENDERED, so the assertion would be about the stylesheet rather than the count.
+  check('...the header counts what will actually be filled as you change your mind',
+    /2 of 3 fields/i.test(await page.locator('#dlg-ask .plan-head').innerText()),
+    await page.locator('#dlg-ask .plan-head').innerText());
+  check('THE POINT: and so does the BUTTON — a static label goes on promising to fill three ' +
+    'after you unticked one, and it is the last thing read before the click',
+    /Fill 2 fields/.test(await submit.innerText()), await submit.innerText());
+
+  await rows.nth(2).locator('.plan-value').fill('My own sentence.');
+  await page.locator('#dlg-ask .modal-field').nth(1).locator('.modal-input').fill('Two weeks');
+  await page.click('#dlg-ask .modal-submit');
+
+  await page.waitForFunction(() => window.__filled.length >= 2, null, { timeout: 10000 });
+  await sleep(400);
+  const filled = await page.evaluate(() => window.__filled);
+
+  check('THE POINT: the row the user unticked is never typed into the real application',
+    !filled.some((f) => f.ref === 'e2'), JSON.stringify(filled.map((f) => f.ref)));
+  check('THE OTHER POINT: the box they typed a correction into is the value that lands — a ' +
+    'positional slip between rows and values passes every unit test and files the wrong answer',
+    filled.some((f) => f.ref === 'e3' && f.value === 'My own sentence.'),
+    JSON.stringify(filled));
+  check('...and the untouched row goes through as proposed',
+    filled.some((f) => f.ref === 'e1' && f.value === 'Jane Doe'), JSON.stringify(filled));
+
+  const transcript = await page.locator('.run-slot').first().innerText();
+  check('...the transcript keeps a plain-language record of what was agreed, so scrolling ' +
+    'back answers "what did I approve on page 3" without expanding a tool result',
+    /Plan approved/.test(transcript) && /2 of 3 fields/.test(transcript),
+    (transcript.match(/Plan approved[^\n]*/) || ['(no notice)'])[0]);
+  check('no uncaught error driving the plan card', errors.length === 0, errors.slice(0, 2).join(' | '));
+
+  await page.close();
+}
+
+// ============ CONTRACT-V11 §5 — the submit confirmation, in the browser
+//
+// The whole change is what the user has to DO, so the assertion has to be about the real
+// dialog: two buttons, no box, and one click that actually submits. As an ask_user this was
+// a required text field plus a second press, and the typed word only granted permission for
+// a click that came later as its own step.
+{
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+
+  await page.addInitScript(() => {
+    const store = {
+      settings: { provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', planMode: 'off', autoSubmit: false },
+      profile: { fullName: 'Jane Doe' },
+    };
+    const tab = { id: 11, title: 'Job', url: 'https://jobs.example/a', status: 'complete', windowId: 9 };
+    window.__clicked = [];
+    window.chrome = {
+      runtime: {
+        id: 't', getURL: (p) => `chrome-extension://t/${p}`,
+        sendMessage: async () => ({ ok: true }),
+        onMessage: { addListener() {}, removeListener() {} }, lastError: null,
+      },
+      storage: {
+        local: {
+          async get(key) {
+            if (key == null) return { ...store };
+            if (Array.isArray(key)) return Object.fromEntries(key.filter((k) => k in store).map((k) => [k, store[k]]));
+            return key in store ? { [key]: store[key] } : {};
+          },
+          async set(obj) { Object.assign(store, obj); },
+          async remove(key) { for (const k of (Array.isArray(key) ? key : [key])) delete store[k]; },
+          async clear() { for (const k of Object.keys(store)) delete store[k]; },
+        },
+        session: { async get() { return {}; }, async set() {}, async remove() {} },
+      },
+      tabs: {
+        async query() { return [tab]; },
+        async get(id) { if (id === 11) return tab; throw new Error('no tab'); },
+        async sendMessage(id, msg) {
+          if (msg && msg.kind === 'jobpilot:ping') return { ok: true, ready: true };
+          if (msg && msg.kind === 'jobpilot:exec') {
+            if (msg.tool === 'click') window.__clicked.push(msg.args.ref);
+            // A real portal: clean until you press Submit, then it names what is missing.
+            // window.__refuse lets one test take the happy path and the next the refusal.
+            if (msg.tool === 'read_errors') {
+              return {
+                ok: true,
+                result: (window.__refuse && window.__clicked.length)
+                  ? 'Please go back to these steps before submitting your application\nError\nFinal certificate - Attachment is required.'
+                  : 'No visible errors.',
+              };
+            }
+            return { ok: true, result: msg.tool === 'click' ? 'Clicked "Submit application".' : 'Application submitted ✓' };
+          }
+          return { ok: true };
+        },
+        async update() {},
+        onCreated: { addListener() {}, removeListener() {} },
+        onUpdated: { addListener() {}, removeListener() {} },
+        onRemoved: { addListener() {}, removeListener() {} },
+        onReplaced: { addListener() {}, removeListener() {} },
+      },
+      webNavigation: { async getAllFrames() { return [{ frameId: 0, url: 'https://jobs.example/a' }]; } },
+      scripting: { async executeScript() { return []; } },
+    };
+    const enc = new TextEncoder();
+    const sse = (events) => new Response(new ReadableStream({
+      start(c) {
+        for (const e of events) c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n`));
+        c.enqueue(enc.encode('data: [DONE]\n'));
+        c.close();
+      },
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    const tool = (id, name, args) => ({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] });
+    const rounds = [
+      [tool('s1', 'confirm_submit', {
+        ref: 'e9', label: 'Submit application',
+        summary: 'Your application for Senior Engineer at Acme, with resume.pdf attached.',
+      })],
+      [tool('s2', 'done', { status: 'submitted', summary: 'in' })],
+    ];
+    window.fetch = async () => sse(rounds.shift() || []);
+  });
+
+  await page.goto(`${ORIGIN}/sidepanel/panel.html`);
+  await page.waitForSelector('#view-chat .composer-input', { timeout: 10000 });
+  const box = page.locator('.run-slot').first().locator('.composer-input');
+  await box.fill('apply and submit');
+  await box.press('Enter');
+
+  await page.waitForSelector('#dlg-confirm[open]', { timeout: 10000 });
+  check('V11 §5 THE CHANGE: the submit confirmation is a plain two-button dialog — there is ' +
+    'nothing to type and no second press to send what you typed',
+    (await page.locator('#dlg-confirm input, #dlg-confirm textarea').count()) === 0
+    && (await page.locator('#dlg-confirm .modal-ok').count()) === 1
+    && (await page.locator('#dlg-confirm .modal-cancel').count()) === 1,
+    `${await page.locator('#dlg-confirm input, #dlg-confirm textarea').count()} input(s)`);
+  check('...the primary button says Submit, not "Confirm"',
+    /^Submit$/.test((await page.locator('#dlg-confirm .modal-ok').innerText()).trim()),
+    await page.locator('#dlg-confirm .modal-ok').innerText());
+  check('...and the dialog says what is being sent and which button it will press',
+    /Senior Engineer at Acme/.test(await page.locator('#dlg-confirm .modal-message').innerText())
+    && /Submit application/.test(await page.locator('#dlg-confirm .modal-message').innerText()),
+    (await page.locator('#dlg-confirm .modal-message').innerText()).replace(/\n/g, ' ').slice(0, 90));
+  check('...focus is on Submit, so approving is one click OR one Enter',
+    await page.evaluate(() => Boolean(document.activeElement && document.activeElement.classList.contains('modal-ok'))));
+
+  await page.click('#dlg-confirm .modal-ok');
+  await page.waitForFunction(() => window.__clicked.length > 0, null, { timeout: 10000 });
+  check('THE POINT: that ONE click is what submits — approval and the click are the same ' +
+    'action, so the button cannot say Submit and leave the form unsent',
+    (await page.evaluate(() => window.__clicked)).includes('e9'),
+    JSON.stringify(await page.evaluate(() => window.__clicked)));
+
+  await sleep(400);
+  check('...and the transcript records that you approved it — "did I actually send that one?" ' +
+    'is a question people ask weeks later',
+    /You approved the submit/.test(await page.locator('.run-slot').first().innerText()));
+  check('no uncaught error driving the submit confirmation', errors.length === 0, errors.slice(0, 2).join(' | '));
+
+  await page.close();
+}
+
+// ============ CONTRACT-V11 §6 — a refused submit, as the user experiences it
+//
+// The reported failure, reproduced: a portal answers Submit with "Final certificate -
+// Attachment is required". The click SUCCEEDS, so nothing in the tool result contradicts
+// it. What has to be true is that the person who pressed Submit is told, in the chat, in
+// the portal's own words — not left to expand an activity row, and never told it went in.
+{
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+
+  await page.addInitScript(() => {
+    const store = {
+      settings: { provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', planMode: 'off', autoSubmit: false },
+      profile: { fullName: 'Jane Doe' },
+    };
+    const tab = { id: 11, title: 'Job', url: 'https://jobs.example/a', status: 'complete', windowId: 9 };
+    window.__clicked = [];
+    window.chrome = {
+      runtime: {
+        id: 't', getURL: (p) => `chrome-extension://t/${p}`,
+        sendMessage: async () => ({ ok: true }),
+        onMessage: { addListener() {}, removeListener() {} }, lastError: null,
+      },
+      storage: {
+        local: {
+          async get(key) {
+            if (key == null) return { ...store };
+            if (Array.isArray(key)) return Object.fromEntries(key.filter((k) => k in store).map((k) => [k, store[k]]));
+            return key in store ? { [key]: store[key] } : {};
+          },
+          async set(obj) { Object.assign(store, obj); },
+          async remove(key) { for (const k of (Array.isArray(key) ? key : [key])) delete store[k]; },
+          async clear() { for (const k of Object.keys(store)) delete store[k]; },
+        },
+        session: { async get() { return {}; }, async set() {}, async remove() {} },
+      },
+      tabs: {
+        async query() { return [tab]; },
+        async get(id) { if (id === 11) return tab; throw new Error('no tab'); },
+        async sendMessage(id, msg) {
+          if (msg && msg.kind === 'jobpilot:ping') return { ok: true, ready: true };
+          if (msg && msg.kind === 'jobpilot:exec') {
+            if (msg.tool === 'click') { window.__clicked.push(msg.args.ref); return { ok: true, result: 'Clicked "Submit".' }; }
+            if (msg.tool === 'read_errors') {
+              return {
+                ok: true,
+                result: window.__clicked.length
+                  ? 'Please go back to these steps before submitting your application\nError\nFinal certificate - Attachment is required.'
+                  : 'No visible errors.',
+              };
+            }
+            return { ok: true, result: 'ok' };
+          }
+          return { ok: true };
+        },
+        async update() {},
+        onCreated: { addListener() {}, removeListener() {} },
+        onUpdated: { addListener() {}, removeListener() {} },
+        onRemoved: { addListener() {}, removeListener() {} },
+        onReplaced: { addListener() {}, removeListener() {} },
+      },
+      webNavigation: { async getAllFrames() { return [{ frameId: 0, url: 'https://jobs.example/a' }]; } },
+      scripting: { async executeScript() { return []; } },
+    };
+    const enc = new TextEncoder();
+    const sse = (events) => new Response(new ReadableStream({
+      start(c) {
+        for (const e of events) c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n`));
+        c.enqueue(enc.encode('data: [DONE]\n'));
+        c.close();
+      },
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    const tool = (id, name, args) => ({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] });
+    const rounds = [
+      [tool('s1', 'confirm_submit', { ref: 'e9', label: 'Submit', summary: 'Senior Engineer at Acme.' })],
+      [tool('s2', 'done', { status: 'blocked', summary: 'The form needs a Final certificate attachment.' })],
+    ];
+    window.fetch = async () => sse(rounds.shift() || []);
+  });
+
+  await page.goto(`${ORIGIN}/sidepanel/panel.html`);
+  await page.waitForSelector('#view-chat .composer-input', { timeout: 10000 });
+  const box = page.locator('.run-slot').first().locator('.composer-input');
+  await box.fill('apply and submit');
+  await box.press('Enter');
+
+  await page.waitForSelector('#dlg-confirm[open]', { timeout: 10000 });
+  await page.click('#dlg-confirm .modal-ok');
+
+  const slot = page.locator('.run-slot').first();
+  await slot.locator('text=Not submitted').first().waitFor({ state: 'attached', timeout: 15000 });
+  const text = await slot.innerText();
+
+  check('V11 §6 THE POINT: the user is TOLD the application did not go in — not left to ' +
+    'expand an activity row, and never told it succeeded',
+    /Not submitted/.test(text) && !/Application submitted/.test(text),
+    (text.match(/Not submitted[^\n]*/) || ['(no notice)'])[0].slice(0, 120));
+  check('...in the portal\'s OWN words, which is what makes it obviously the same message ' +
+    'they can see sitting in the tab',
+    /Final certificate - Attachment is required/.test(text));
+  check('...and it names the one thing they have to do that JobPilot cannot do for them',
+    /needs a file/i.test(text) && /Profile tab/.test(text),
+    (text.match(/Not submitted[^\n]*/) || [''])[0].slice(-90));
+  check('...the click really did happen — this is a refusal by the FORM, not a failure to press',
+    (await page.evaluate(() => window.__clicked)).includes('e9'));
+  const submitRow = slot.locator('.tool-step', { hasText: 'confirm submit' }).first();
+  check('THE OTHER POINT: that row is marked FAILED, not ticked — onToolEnd is one-shot, so ' +
+    'settling it optimistically when the dialog opened left a green ✓ on a submit that did not happen',
+    /\bfail\b/.test(await submitRow.getAttribute('class') || ''),
+    await submitRow.getAttribute('class'));
+  check('no uncaught error on a refused submit', errors.length === 0, errors.slice(0, 2).join(' | '));
+
+  await page.close();
+}
+
+// ============ CONTRACT-V12 — onboarding: the checklist, the meter, the resume read
+{
+  // Basics already filled, so the ranking has room to show what it is FOR: a field two real
+  // forms have asked about, promoted above the general priors.
+  const { page } = await openPanel({
+    seed: {
+      settings: { provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm' },
+      profile: {
+        fullName: 'Jane', email: 'j@x.com', phone: '1',
+        savedAnswers: [
+          { q: 'What is your notice period?', a: '2 weeks' },
+          { q: 'Notice period at current employer?', a: '2 weeks' },
+        ],
+      },
+      documents: [],
+    },
+  });
+
+  // --- the checklist
+  await page.waitForSelector('.setup-strip', { timeout: 10000 });
+  check('V12 §3 a half-set-up install is told what is left, in the header',
+    (await page.locator('.setup-strip .setup-step').count()) === 3
+    && /1 to go/i.test(await page.locator('.setup-lead').innerText()),
+    await page.locator('.setup-strip').innerText().then((t) => t.replace(/\n/g, ' ')));
+  check('...the finished steps are ticked, so it reads as progress rather than a scolding',
+    (await page.locator('.setup-step.done').count()) === 2);
+  await page.click('.setup-step:not(.done)');
+  check('...and a step is a ROUTE — clicking it lands on the tab that completes it',
+    await page.locator('#view-profile').evaluate((el) => el.classList.contains('active')));
+
+  // --- the meter
+  const meter = page.locator('.pf-meter');
+  check('V12 §2 the meter names what to fill next rather than only counting',
+    (await meter.locator('.pf-missing li').count()) > 0
+    && /Notice period/.test(await meter.innerText()),
+    (await meter.innerText()).replace(/\n/g, ' ').slice(0, 110));
+  check('THE POINT: the field two real forms already asked about is TOP, and says why — that ' +
+    'is evidence about this person\'s applications, not a general claim about forms',
+    /asked you this 2 times/.test(await meter.innerText())
+    && /Notice period/.test(await meter.locator('.pf-missing li').first().innerText()),
+    (await meter.locator('.pf-missing li').first().innerText()).replace(/\n/g, ' '));
+
+  await page.click('.pf-missing-link >> nth=0');
+  check('...and clicking one puts the caret in that box, instead of leaving you to scroll',
+    (await page.evaluate(() => document.activeElement && document.activeElement.id)) === 'pf-noticePeriod',
+    await page.evaluate(() => document.activeElement && document.activeElement.id));
+
+  // --- fill from resume, with nothing to read yet
+  check('V12 §1 with no resume the button says so rather than failing when pressed',
+    await page.locator('#btn-fill-from-resume').isDisabled());
+
+  // Paste resume text, then read it. The stubbed provider answers with a tool call.
+  await page.evaluate(() => {
+    window.fetch = async () => new Response(
+      new ReadableStream({
+        start(c) {
+          const enc = new TextEncoder();
+          c.enqueue(enc.encode(`data: ${JSON.stringify({
+            choices: [{ delta: { tool_calls: [{ index: 0, id: 'x', function: { name: 'profile_fields', arguments: JSON.stringify({ currentTitle: 'Staff Engineer', currentCompany: 'Acme', location: 'Bengaluru, India', city: 'Delhi' }) } }] } }],
+          })}\n`));
+          c.enqueue(enc.encode('data: [DONE]\n'));
+          c.close();
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  });
+  await page.locator('#pf-resumeText').fill('Jane Doe — Staff Engineer at Acme, Bengaluru.');
+  await page.locator('#pf-city').fill('Bengaluru');
+  await sleep(700); // the store's debounced write
+
+  check('V12 §3 THE POINT: the checklist REMOVES itself the moment the last step is done — a ' +
+    'strip that survives completion is a nag you cannot dismiss',
+    (await page.locator('.setup-strip').count()) === 0,
+    `${await page.locator('.setup-strip').count()} strip(s) left`);
+
+  await page.click('#btn-fill-from-resume');
+  await page.waitForSelector('#dlg-ask[open] .modal-plan', { timeout: 10000 });
+
+  const rows = page.locator('#dlg-ask .plan-row');
+  check('V12 §1 the resume proposes values in the same review card plan mode uses',
+    (await rows.count()) === 4, `${await rows.count()} rows`);
+  const cityRow = page.locator('#dlg-ask .plan-row', { hasText: 'City' }).first();
+  check('THE POINT: the row that would overwrite what the user typed starts UNTICKED and is ' +
+    'marked — a machine extraction must never quietly beat an afternoon of their own typing',
+    (await cityRow.locator('input[type=checkbox]').isChecked()) === false
+    && (await cityRow.locator('.plan-src-inferred').count()) === 1
+    && /replaces/.test(await cityRow.locator('.plan-src').innerText()),
+    await cityRow.locator('.plan-src').innerText());
+  const titleRow = page.locator('#dlg-ask .plan-row', { hasText: 'Current job title' }).first();
+  check('...while the empty ones start ticked, because filling those is the entire point',
+    (await titleRow.locator('input[type=checkbox]').isChecked()) === true
+    && /empty now/.test(await titleRow.locator('.plan-src').innerText()),
+    await titleRow.locator('.plan-src').innerText());
+  check('...and the button counts only what will actually be written',
+    /Fill 3 fields/.test(await page.locator('#dlg-ask .modal-submit').innerText()),
+    await page.locator('#dlg-ask .modal-submit').innerText());
+
+  await page.click('#dlg-ask .modal-submit');
+  await sleep(700);
+  check('V12 §1 the accepted values land in the real boxes',
+    (await page.locator('#pf-currentTitle').inputValue()) === 'Staff Engineer'
+    && (await page.locator('#pf-currentCompany').inputValue()) === 'Acme',
+    `${await page.locator('#pf-currentTitle').inputValue()} / ${await page.locator('#pf-currentCompany').inputValue()}`);
+  check('THE OTHER POINT: and the unticked one did NOT — Bengaluru is still what they typed',
+    (await page.locator('#pf-city').inputValue()) === 'Bengaluru',
+    await page.locator('#pf-city').inputValue());
+  check('...the meter moves with it, so the work shows',
+    !/Current job title/.test(await page.locator('.pf-meter').innerText()),
+    (await page.locator('.pf-meter').innerText()).replace(/\n/g, ' ').slice(0, 110));
+
   await page.close();
 }
 

@@ -165,11 +165,14 @@ export function initialValues(fields) {
   for (const field of fields) {
     const type = field.type || 'text';
     if (type === 'plan') {
-      // Every row starts ticked. The card is an approval, not a selection: the common
-      // action is "yes, all of that", and making the user tick twenty boxes to say so
-      // would be a worse interruption than the fifteen this feature exists to remove.
+      // Rows start ticked unless one says otherwise. The card is an approval, not a
+      // selection: the common action is "yes, all of that", and making the user tick twenty
+      // boxes to say so would be a worse interruption than the fifteen plan mode removes.
+      // `include: false` is for the rows where the default has to be the other way — a
+      // resume extraction proposing a value OVER something the user typed themselves (see
+      // profile-intel.js extractionRows).
       values[field.name] = (field.rows || []).map((row) => ({
-        include: true,
+        include: !row || row.include !== false,
         value: row && row.value != null ? String(row.value) : '',
       }));
     } else if (type === 'checklist') {

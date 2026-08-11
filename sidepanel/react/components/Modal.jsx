@@ -98,7 +98,7 @@ function AskField({ field, value, onChange, registerFocus }) {
   // rather than one, so it registers no focus target and gets its own container; unlike a
   // checklist each row also carries an editable value and a provenance chip.
   if (type === 'plan') {
-    return <PlanField field={field} value={value} onChange={onChange} />;
+    return <PlanField field={field} value={value} onChange={onChange} setNode={setNode} />;
   }
 
   // A checklist is a <label> per row, not one control — so it gets its own container
@@ -202,7 +202,7 @@ function AskField({ field, value, onChange, registerFocus }) {
  * Presentational, like AskField: every value lives in AskDialog, so collect() sees one
  * consistent snapshot whichever control was last touched.
  */
-function PlanField({ field, value, onChange }) {
+function PlanField({ field, value, onChange, setNode }) {
   const rows = Array.isArray(field.rows) ? field.rows : [];
   const state = value || [];
   const kept = state.filter((r) => r && r.include).length;
@@ -235,31 +235,33 @@ function PlanField({ field, value, onChange }) {
       <ul className="plan-rows">
         {rows.map((row, i) => {
           const st = state[i] || { include: false, value: '' };
-          const inferred = row.source === 'inferred';
+          // ONE highlighted state, whatever the card is for. In a plan it means "the model
+          // worked this value out rather than reading it off your profile"; in a resume
+          // extraction it means "this would replace something you typed". Both are the same
+          // instruction to the reader — look at this one — so they get the same chip, and
+          // the caller decides what earns it (see plan.js provenanceOf, profile-intel.js
+          // extractionRows). A chip that means several things is a chip nobody reads.
+          const warn = Boolean(row.warn);
           return (
             <li className={'plan-row' + (st.include ? '' : ' plan-row-off')} key={row.ref || i}>
               <label className="plan-row-head">
                 <input
                   type="checkbox"
+                  // The dialog's opening focus. Without a target registered here it fell
+                  // through to the SUBMIT button (see AskDialog's mount effect), which on a
+                  // card whose entire purpose is being read makes "approve everything" the
+                  // default action one Enter away. Focus belongs in the content; Tab then
+                  // walks the rows and Enter still approves once you have looked.
+                  ref={i === 0 ? setNode : undefined}
                   checked={Boolean(st.include)}
                   onChange={(e) => setRow(i, { include: e.target.checked })}
                 />
                 <span className="plan-row-label">{row.label}</span>
                 <span
-                  className={'plan-src' + (inferred ? ' plan-src-inferred' : '')}
-                  title={
-                    inferred
-                      ? 'JobPilot worked this one out — it is not a value from your profile. Worth a look.'
-                      : row.source === 'saved'
-                        ? 'An answer you gave on an earlier application'
-                        : 'Straight from your Profile tab'
-                  }
+                  className={'plan-src' + (warn ? ' plan-src-inferred' : '')}
+                  title={row.chipTitle || undefined}
                 >
-                  {inferred
-                    ? 'worked out'
-                    : row.source === 'saved'
-                      ? 'you answered before'
-                      : `profile · ${row.detail}`}
+                  {row.chip}
                 </span>
               </label>
               <input
@@ -389,6 +391,22 @@ function AskDialog({ job }) {
   const [save, setSave] = useState(() => Boolean(spec.saveOption && spec.saveOption.checked));
 
   const disabled = fields.some((f) => f.required && !String(fieldValueOf(f, values[f.name])).trim());
+
+  /**
+   * A plan card's primary button counts what is actually ticked, RIGHT NOW.
+   *
+   * spec.submitLabel is fixed when the dialog opens, which is fine for every other prompt
+   * and wrong for this one: untick two rows and the footer went on promising to fill all
+   * eight while the header above it said seven of eight. The last thing the user reads
+   * before clicking has to be the thing that is about to happen.
+   */
+  const planField = fields.find((f) => (f.type || 'text') === 'plan');
+  const planKept = planField
+    ? (values[planField.name] || []).filter((r) => r && r.include).length
+    : 0;
+  const submitLabel = planField
+    ? (planKept === 0 ? 'Skip all fields' : `Fill ${planKept} field${planKept === 1 ? '' : 's'}`)
+    : (spec.submitLabel || 'Submit');
 
   function doSubmit(snapshot = values) {
     const bad = fields.some((f) => f.required && !String(fieldValueOf(f, snapshot[f.name])).trim());
@@ -536,7 +554,7 @@ function AskDialog({ job }) {
                 is not optional: without it, answering by MOUSE did nothing at all and
                 every modal in the panel could only be completed with Enter. */}
             <button type="button" className="btn-primary modal-submit" ref={submitRef} disabled={disabled} onClick={() => doSubmit()}>
-              {spec.submitLabel || 'Submit'}
+              {submitLabel}
             </button>
           </div>
         </div>

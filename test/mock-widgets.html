@@ -129,6 +129,40 @@
   <h2>Write-fighting fields</h2>
   <label>Locked title <input id="locked" type="text"></label>
   <label>Masked phone <input id="masked" type="tel"></label>
+
+  <h2>Consent toggles (SAP UI5 switches — aria-hidden, role-less, class-stated)</h2>
+  <!-- Faithful to sap.m.Switch as measured on a live SuccessFactors EasyApply form:
+       the switch is a DIV with aria-hidden="true", NO role, no inner checkbox, and its
+       state lives in the sapMSwtOn/sapMSwtOff classes. The old visibility rule ("a
+       legitimate form control is never aria-hidden") read it as a honeypot, and the one
+       control gating submission did not exist as far as read_page was concerned. -->
+  <div style="display:flex;align-items:center;gap:8px">
+    <span>Ich habe die Datenschutzgrundsätze gelesen und zur Kenntnis genommen.</span>
+    <div id="privacy-switch" aria-hidden="true" class="sapMSwt sapMSwtOff" style="width:64px;height:32px;background:#ccc;border-radius:16px;cursor:pointer"></div>
+  </div>
+  <!-- A PROPER ARIA switch, which was also undiscoverable — [role=switch] was simply
+       missing from the discovery selector. -->
+  <div style="display:flex;align-items:center;gap:8px">
+    <span id="tp-label">Join the talent pool</span>
+    <div id="talent-switch" role="switch" aria-checked="false" aria-labelledby="tp-label" tabindex="0" style="width:64px;height:32px;background:#ccc;border-radius:16px;cursor:pointer"></div>
+  </div>
+  <!-- And the reason the aria-hidden rule exists at all: an INVISIBLE aria-hidden decoy.
+       The paint-based rule must not resurrect this one. -->
+  <div aria-hidden="true" style="width:0;height:0;overflow:hidden">
+    <div id="decoy-switch" class="sapMSwt sapMSwtOff"></div>
+  </div>
+
+  <h2>P&amp;I LOGA (whole form aria-hidden; ":"-cell labels; DIV buttons)</h2>
+  <!-- Faithful to the live pi-asp.de Bewerber-Web: the ENTIRE form table is
+       aria-hidden="true"; each row is <td>label</td><td>:</td><td><input></td> with no
+       label association (ids LG_FFC_n, GUID names); the submit is a role-less DIV. -->
+  <table aria-hidden="true" class="LG-Form LG-FormBox">
+    <tr><td>Nachname*</td><td>:</td><td><input id="loga-name" type="text" class="LG-TextBox required" name="92ffa594-99df-47d4"></td></tr>
+  </table>
+  <div id="loga-submit" class="LG-Button primary LG-Button-up" style="display:inline-block;padding:6px 14px;background:#e8b64c;cursor:pointer">JETZT BEWERBEN</div>
+
+  <h2>Robot check (request_captcha points the user here)</h2>
+  <div id="captcha-box" class="g-recaptcha" data-sitekey="test" style="width:300px;height:76px;border:1px solid #ccc">I am not a robot</div>
   <label>Pronouns
     <select id="spaced">
       <option value="">Choose…</option>
@@ -303,4 +337,23 @@
     const d = masked.value.replace(/\D+/g, '').slice(0, 10);
     masked.value = d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : d;
   });
+
+  // ---- 10. consent toggles --------------------------------------------------------
+  // The UI5 switch flips its state CLASS on click, exactly as the real sap.m.Switch does.
+  const privacySwitch = document.getElementById('privacy-switch');
+  privacySwitch.addEventListener('click', () => {
+    privacySwitch.classList.toggle('sapMSwtOn');
+    privacySwitch.classList.toggle('sapMSwtOff');
+    privacySwitch.style.background = privacySwitch.classList.contains('sapMSwtOn') ? '#4a9e5c' : '#ccc';
+  });
+  const talentSwitch = document.getElementById('talent-switch');
+  talentSwitch.addEventListener('click', () => {
+    const on = talentSwitch.getAttribute('aria-checked') === 'true';
+    talentSwitch.setAttribute('aria-checked', String(!on));
+    talentSwitch.style.background = !on ? '#4a9e5c' : '#ccc';
+  });
+
+  // ---- 11. the LOGA submit records that it was really clicked -----------------------
+  const logaSubmit = document.getElementById('loga-submit');
+  logaSubmit.addEventListener('click', () => { logaSubmit.dataset.clicked = 'yes'; });
 </script>

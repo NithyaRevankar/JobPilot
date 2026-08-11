@@ -735,6 +735,141 @@ code {
 
 .field-wide { grid-column: 1 / -1; }
 
+/* ------------------------------------------- CONTRACT-V12 — setup and completeness */
+
+/* The first-run checklist. Sits between the header and the tab bar, and is simply absent
+   once the three steps are done — so it costs a finished install no vertical space at all
+   in a panel that has very little to spare. */
+.setup-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 7px 12px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.setup-lead {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  flex: none;
+}
+
+.setup-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  transition: border-color 150ms ease;
+}
+
+.setup-step:hover { border-color: var(--accent); }
+.setup-step.done { color: var(--text-faint); border-color: var(--border); }
+.setup-mark { color: var(--green); font-weight: 700; }
+.setup-step:not(.done) .setup-mark { color: var(--text-faint); font-weight: 400; }
+
+/* The completeness meter. The bar is the least useful part and is sized accordingly; the
+   named list under it is the feature. */
+.pf-meter { margin-bottom: 12px; }
+
+.pf-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.pf-meter-pct { font-size: 15px; font-weight: 650; color: var(--text); }
+.pf-meter-count { font-size: 11px; color: var(--text-faint); }
+
+.pf-meter-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.pf-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 220ms ease;
+}
+
+.pf-meter-low .pf-meter-fill { background: var(--red); }
+.pf-meter-warn .pf-meter-fill { background: var(--amber); }
+.pf-meter-ok .pf-meter-fill { background: var(--green); }
+
+.pf-meter-lead {
+  margin: 9px 0 5px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+.pf-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-missing li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+.pf-missing-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--accent);
+  text-align: left;
+  flex: none;
+}
+
+.pf-missing-link:hover { text-decoration: underline; }
+
+.pf-missing-why {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pf-fill-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.pf-fill-row .btn-primary { align-self: flex-start; }
+
+.pf-fill-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.45;
+}
+
 /* Explanatory prose under a control, as opposed to the control's NAME. `.field > span`
    above uppercases every direct span child because those are one-word labels; a sentence
    needs the child selector here to win, or "Only when there is something to decide"
@@ -1803,3 +1938,47 @@ dialog.modal[open]::backdrop { animation: backdrop-in 160ms ease; }
 }
 
 .empty-hint strong { color: var(--text); }
+
+/* ------------------------------------------------------------ the application log */
+
+.apps-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.apps-count { font-size: 12.5px; color: var(--text-dim); }
+
+.apps-empty { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; max-width: 320px; }
+
+.apps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.apps-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--bg-raised);
+}
+
+.apps-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+
+.apps-title { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.apps-company { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.apps-side { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+
+.apps-status { padding: 1px 7px; border-radius: 9px; font-weight: 600; }
+.apps-status-ok   { color: var(--green); background: var(--green-soft); }
+.apps-status-info { color: var(--accent); background: var(--accent-soft); }
+
+.apps-date { color: var(--text-dim); }
+
+.apps-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.apps-actions a { color: var(--accent); text-decoration: none; font-size: 13px; }
+.apps-delete { color: var(--text-dim); font-size: 14px; line-height: 1; padding: 2px 4px; }
+.apps-delete:hover { color: var(--red); }

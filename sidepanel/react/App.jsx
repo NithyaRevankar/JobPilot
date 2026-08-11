@@ -18,10 +18,12 @@
 
 import { ModalHost } from './components/Modal.jsx';
 import { ToastHost } from './components/Toast.jsx';
-import { StoreProvider, useAppShell } from './state/store.jsx';
+import { StoreProvider, useAppShell, useDocuments, useProfile } from './state/store.jsx';
 import { RunsProvider } from './state/runs-context.jsx';
+import { setupSteps } from '../js/profile-intel.js';
 
 import ChatView from './views/ChatView.jsx';
+import JobsView from './views/JobsView.jsx';
 import ProfileView from './views/ProfileView.jsx';
 import MemoryView from './views/MemoryView.jsx';
 import VaultView from './views/VaultView.jsx';
@@ -40,6 +42,17 @@ const VIEWS = [
     glyph: (
       <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
         <path d="M3 4.5h14v9H8l-3.5 3v-3H3z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
+  {
+    key: 'jobs',
+    label: 'Jobs',
+    View: JobsView,
+    glyph: (
+      <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+        <rect x="3" y="6.5" width="14" height="9.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M7.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 12.5 5v1.5M3 10.5h14" fill="none" stroke="currentColor" strokeWidth="1.5" />
       </svg>
     ),
   },
@@ -134,6 +147,47 @@ function Header() {
   );
 }
 
+/**
+ * CONTRACT-V12 §3 — the first-run checklist.
+ *
+ * Three things, and it REMOVES ITSELF once they are done. That is the whole design: a strip
+ * that survives completion is a nag, and a nag in a 400px panel is a nag you cannot dismiss.
+ * It is also not a tour or a modal — nothing here blocks the panel, because the fastest way
+ * to understand JobPilot is still to point it at a job, and someone who wants to do that
+ * with two boxes unticked is allowed to.
+ *
+ * Each step is a button to the tab that completes it. Naming the step without saying where
+ * to go is how you get "connect an LLM" read as an error message.
+ */
+function SetupChecklist() {
+  const { isConfigured, setTab, ready } = useAppShell();
+  const { profile } = useProfile();
+  const { documents } = useDocuments();
+  if (!ready) return null;
+
+  const steps = setupSteps({ configured: isConfigured(), profile, documents });
+  const left = steps.filter((s) => !s.done).length;
+  if (!left) return null;
+
+  return (
+    <div className="setup-strip" role="group" aria-label="Setup checklist">
+      <span className="setup-lead">{left} to go</span>
+      {steps.map((s) => (
+        <button
+          key={s.key}
+          type="button"
+          className={'setup-step' + (s.done ? ' done' : '')}
+          onClick={() => setTab(s.tab)}
+          title={s.hint}
+        >
+          <span className="setup-mark" aria-hidden="true">{s.done ? '✓' : '○'}</span>
+          <span>{s.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function TabBar() {
   const { tab, setTab } = useAppShell();
   return (
@@ -165,6 +219,7 @@ function Shell() {
     <>
       <div id="app">
         <Header />
+        <SetupChecklist />
         <TabBar />
         {VIEWS.map(({ key, View }) => (
           <section key={key} id={`view-${key}`} className={'view' + (tab === key ? ' active' : '')}>

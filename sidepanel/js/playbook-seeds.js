@@ -150,19 +150,51 @@ export const SEEDS = [
 
   {
     platform: 'successfactors',
-    label: 'SAP SuccessFactors', seedVersion: 2,
+    // v3: the SAP UI5 "EasyApply" variant (employer-hosted, control ids "EasyApply---…")
+    // had no craft at all — runs filled the plain text inputs and stalled on every UI5
+    // dropdown, date picker and collapsed section, which read as "it only fills basics".
+    label: 'SAP SuccessFactors', seedVersion: 4,
     procedure: [
       'SuccessFactors usually requires an account. If a sign-in / register screen appears, ask the user, then use request_secret for the password.',
       'The application is a multi-step flow. Upload the resume with upload_file early — it may prefill some fields.',
       'read_page after the upload and correct the parsed fields; the parser is unreliable.',
       'Fill each step fully, then advance with "Next".',
       'read_errors after each step — validation errors block advancement.',
+      'Before submitting, read the whole page to the bottom: required consent controls (privacy / Datenschutz) sit last and block submission silently — often toggle switches; set_checkbox true on each.',
       'Verify on the review step, then submit per the autoSubmit rule and read_page to confirm.',
     ],
     tips: [
       'The careers site is often at a jobs2web.com or sapsf.com host even when it is branded as the company.',
       'The UI is slow to render. wait, then read_page, before acting after any navigation.',
       'Many fields are custom SAP controls rather than native inputs — use choose_option on their dropdowns.',
+      'The EasyApply variant (control ids start "EasyApply---") is a SAP UI5 app that renders into an EMPTY page. If read_page finds nothing, wait with until_text for the form heading, then re-read.',
+      'UI5 text boxes are real inputs under the skin — plain fill works. UI5 dropdowns are NOT native selects: use choose_option.',
+      'A UI5 dropdown\'s option list renders at the very END of the document, not next to the box. If choose_option fails, click the dropdown arrow, then read_page mode:"changes" and click the item there.',
+      'Date fields want the page language\'s format (German: TT.MM.JJJJ, e.g. 03.11.2025). fill the value, then click another field — UI5 validates on blur.',
+      'The upload button hides a real file input. find the input[type=file] and upload_file on that ref — clicking the button opens an OS dialog that cannot be automated.',
+      'EasyApply uses FriendlyCaptcha. If submit appears to do nothing, treat it as a captcha: request_captcha, then retry the submit.',
+      'Sections may be collapsed panels — click a section header to expand it before reading; collapsed fields are invisible to read_page.',
+    ],
+  },
+
+  {
+    platform: 'pi_loga',
+    label: 'P&I LOGA', seedVersion: 1,
+    procedure: [
+      'The application form sits directly BELOW the job posting on the same page — scroll down; no account and no separate apply step.',
+      'Fill the personal fields (Anrede, Nachname, Vorname, E-Mail + Bestätigung, address, Handy). E-Mail Bestätigung must repeat the e-mail exactly.',
+      'Geburtsdatum wants the German format TT.MM.JJJJ — fill it, then click another field to commit.',
+      'Uploads are separate labelled slots: Lebenslauf = resume, Anschreiben = cover letter; the rest are optional. upload_file on each slot\'s file input.',
+      'Answer "Wie haben Sie uns gefunden?" with choose_option.',
+      'At the bottom set every consent checkbox the user would: the Datenschutzerklärung one marked * is REQUIRED; the data-retention one (Datenfreigabe) is the user\'s choice — ask if unsure.',
+      'read_errors, then submit with the "JETZT BEWERBEN" button per the autoSubmit rule, and read_page to confirm.',
+    ],
+    tips: [
+      'Labels live in the table cell to the LEFT of each field — the inputs themselves carry no label attributes and GUID names.',
+      'Controls are flagged (aria-hidden) in read_page — that is LOGA marking its own live form, not a trap; fill them normally.',
+      'Dropdowns (Anrede, source) are combo inputs, not native selects — choose_option, never select_option.',
+      'Buttons are DIVs, listed by their text ("JETZT BEWERBEN") — click works on them normally.',
+      'The posting page and the form share one long page — read_page within the form section to keep refs stable.',
     ],
   },
 

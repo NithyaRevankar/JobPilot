@@ -73,9 +73,14 @@ export function buildSystemPrompt({ profile, documents, settings, credentialHost
   if (autoSubmit) {
     lines.push('8. autoSubmit is TRUE: you may click the final submit button once every required field is filled — no confirmation needed.');
   } else {
-    lines.push('8. autoSubmit is FALSE: after filling everything, call ask_user to get explicit confirmation BEFORE clicking the final submit button. If the user wants to review first, call done with status "ready_for_review".');
+    // CONTRACT-V11 §5. This used to say "call ask_user", which rendered as a text box the
+    // user had to type "yes" into and then press a second button to send — two actions and
+    // a guess at the magic word, for the single most consequential moment in a run.
+    // confirm_submit is one dialog with Submit and Cancel, and it performs the click, so
+    // the button labelled Submit is the thing that submits.
+    lines.push('8. autoSubmit is FALSE: when everything is filled and only the submit is left, call confirm_submit with the submit button\'s ref, its visible label, and a one-sentence summary of what is being sent. It asks the user and, if they approve, CLICKS it for you — do not click it yourself and do not use ask_user for this. If they cancel, call done with status "ready_for_review".');
   }
-  lines.push('9. After clicking submit, call read_errors and/or read_page to VERIFY the submission actually succeeded (confirmation text, no validation errors). Report the true outcome via done — never claim success you did not verify.');
+  lines.push('9. After clicking submit, call read_errors and/or read_page to VERIFY the submission actually succeeded (confirmation text, no validation errors). Report the true outcome via done — never claim success you did not verify. When the outcome is submitted, ready_for_review or already_applied, include job_title and company from the posting — they go into the user\'s application log.');
   lines.push('10. When given multiple job URLs, handle them sequentially: navigate → read → fill → finish, then move to the next.');
   // CONTRACT-V8 §5 — this rule used to ask for efficiency without giving the model
   // anything to be efficient WITH, so it either re-read everything or guessed.
@@ -95,7 +100,7 @@ export function buildSystemPrompt({ profile, documents, settings, credentialHost
   // to), as opposed to craft (below): the run follows new tabs itself, and a captcha is
   // always a human's job.
   lines.push('17. Clicking Apply (or a login button) often opens the application in a NEW tab. JobPilot follows it automatically and the tool result says so — after that note, every ref you hold is from the OLD page: call read_page before anything else.');
-  lines.push('18. CAPTCHAs are the user\'s job, never yours. When read_page or read_errors reports one — or a submit silently does nothing, which is how an invisible captcha behaves — do not try to solve or bypass it. ask_user to solve it in the tab and confirm when done, then read_page and continue.');
+  lines.push('18. CAPTCHAs are the user\'s job, never yours. When read_page or read_errors reports one — or a submit silently does nothing, which is how an invisible captcha behaves — do not try to solve or bypass it, and do NOT ask_user about it. Call request_captcha: it focuses the tab, shows the user the challenge, and waits for their confirmation. Then retry the blocked action and read_errors.');
   // "Already applied" is a real outcome, not a failure. Reported as `blocked` it read as
   // the extension breaking; the user deserves the portal's actual answer in plain words.
   // Portals say it in their own language ("Sie haben sich bereits für diese Stelle

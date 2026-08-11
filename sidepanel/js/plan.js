@@ -284,7 +284,7 @@ export function inferredCount(rows) {
  */
 export function formatPlanResult({
   results = [], answers = null, unknowns = [], dropped = 0, refused = [],
-  autoApproved = false, stopped = false,
+  autoApproved = false, stopped = false, unpacked = 0,
 }) {
   const filled = results.filter((r) => r.status === 'ok');
   const skipped = results.filter((r) => r.status === 'skipped');
@@ -335,6 +335,18 @@ export function formatPlanResult({
     lines.push('Now fill those answers in with fill/select_option/choose_option — they are NOT filled yet.');
   }
 
+  // Correct it in the RUN, not only in the prompt — same as formatAnswers. A model that
+  // numbered six questions into one string will keep doing it on the next page unless it is
+  // told what happened to the last one, and one blob saved as one answer row matches
+  // nothing on the next application.
+  if (unpacked > 1) {
+    lines.push(
+      `NOTE: you put ${unpacked} questions inside ONE question string. JobPilot split them into ` +
+      `${unpacked} separate boxes and saved each answer under its own question, which is the only way ` +
+      'they can be reused on the next application. Pass unknowns:[{question:"…"},{question:"…"}] — one ' +
+      'entry per question, never numbered inside one string.'
+    );
+  }
   if (dropped > 0) {
     lines.push(`${dropped} more field(s) did not fit in one plan (the cap is ${MAX_PLAN_FILLS}). Call propose_plan again for the rest.`);
   }

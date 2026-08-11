@@ -268,6 +268,92 @@ check('select_option tolerates whitespace on either side of the match',
   r.ok && /Prefer not to say/.test(r.result || ''),
   (r.result || r.error || '').slice(0, 90));
 
+// =============================== §10 consent toggles (SAP UI5 + proper ARIA switches)
+//
+// Measured on a live SuccessFactors EasyApply form: sap.m.Switch is a DIV with
+// aria-hidden="true", no role, no inner checkbox, state in sapMSwtOn/Off classes — and it
+// is the REQUIRED privacy consent, so a run that cannot see it can fill every field and
+// still never submit. That is exactly "it only fills basic details".
+r = await exec('read_page', {});
+const swInv = r.result || '';
+// By the describe-line marker, not the element id: labelFor may resolve any nearby text
+// as the label (here it picks the section heading), and exactly one visible element on
+// this page describes as a toggle switch.
+const privacyRef = refOf(swInv, /toggle switch — use set_checkbox/);
+const talentRef = refOf(swInv, /Join the talent pool|talent-switch/);
+check('THE POINT: the aria-hidden UI5 switch EXISTS in the inventory — the honeypot rule ' +
+  'said "a legitimate control is never aria-hidden", and SAP shipped one',
+  Boolean(privacyRef), privacyRef || swInv.split('\n').filter((l) => /switch/i.test(l)).join(' | ').slice(0, 120));
+check('...reported as a checkbox with its class-borne state read correctly',
+  new RegExp(`\\[${privacyRef}\\] checkbox .*checked=false.*toggle switch`).test(swInv),
+  (swInv.split('\n').find((l) => l.includes(`[${privacyRef}]`)) || '').slice(0, 110));
+check('...and a PROPER role=switch is discovered too — it was missing from the selector',
+  Boolean(talentRef), talentRef || '(not listed)');
+check('...while the invisible aria-hidden decoy stays invisible — the carve-out must not ' +
+  'resurrect the honeypot it was protecting against',
+  !/decoy-switch/.test(swInv));
+
+r = await exec('set_checkbox', { ref: privacyRef, checked: true });
+check('set_checkbox flips the UI5 switch, verifying through its state CLASS',
+  r.ok && /checked=true/.test(r.result || ''), (r.result || r.error || '').slice(0, 90));
+check('...and the page really flipped', await page.evaluate(
+  () => document.getElementById('privacy-switch').classList.contains('sapMSwtOn')));
+
+r = await exec('set_checkbox', { ref: privacyRef, checked: true });
+check('...idempotently — asking again is a no-op, not a toggle back off',
+  r.ok && /already|no change/.test(r.result || ''), (r.result || r.error || '').slice(0, 90));
+
+r = await exec('set_checkbox', { ref: talentRef, checked: true });
+check('the ARIA switch flips through aria-checked',
+  r.ok && /checked=true/.test(r.result || '') && await page.evaluate(
+    () => document.getElementById('talent-switch').getAttribute('aria-checked') === 'true'),
+  (r.result || r.error || '').slice(0, 90));
+
+// ================================ §11 the aria-hidden form (P&I LOGA, pi-asp.de)
+//
+// The live portal marks its ENTIRE form table aria-hidden="true". Under the old rule
+// read_page saw zero fields — the whole application was unfillable. The paint-based rule
+// lists the visibly rendered controls, flagged; the ":" separator cell must not become
+// the field's label; and the role-less DIV submit must exist and be clickable.
+const logaRef = refOf(swInv, /Nachname\*/);
+check('a field inside the aria-hidden form table IS discovered, labelled from the row ' +
+  'cell — not from the ":" separator between them',
+  Boolean(logaRef) && new RegExp(`\\[${logaRef}\\] text input label="Nachname\\*"`).test(swInv),
+  (swInv.split('\n').find((l) => /Nachname/.test(l)) || '(absent)').slice(0, 100));
+check('...and carries the (aria-hidden) flag, so a model can still honor a trap label',
+  /\(aria-hidden\)/.test(swInv.split('\n').find((l) => l.includes(`[${logaRef}]`)) || ''));
+
+const logaBtnRef = refOf(swInv, /JETZT BEWERBEN/);
+check('the DIV submit button exists in the inventory — LOGA has no <button> anywhere',
+  Boolean(logaBtnRef) && new RegExp(`\\[${logaBtnRef}\\] button`).test(swInv),
+  (swInv.split('\n').find((l) => /BEWERBEN/.test(l)) || '(absent)').slice(0, 90));
+
+r = await exec('fill', { ref: logaRef, value: 'Möllhoff' });
+check('fill works on the aria-hidden field', r.ok && await page.evaluate(
+  () => document.getElementById('loga-name').value === 'Möllhoff'),
+  (r.result || r.error || '').slice(0, 80));
+
+r = await exec('click', { ref: logaBtnRef });
+check('click works on the DIV button', r.ok && await page.evaluate(
+  () => document.getElementById('loga-submit').dataset.clicked === 'yes'),
+  (r.result || r.error || '').slice(0, 80));
+
+// ============================== §12 show_captcha — point the human at the challenge
+//
+// The panel half (tab focus + one-button dialog) is panel-harness's; this is the page
+// half: the widget is scrolled to center and visibly spotlighted, so the user arriving
+// from the panel does not hunt the page for a small checkbox.
+await page.evaluate(() => window.scrollTo(0, 0));
+r = await exec('show_captcha');
+check('show_captcha finds and reports the widget', r.ok && /reCAPTCHA.*highlighted/.test(r.result || ''),
+  (r.result || r.error || '').slice(0, 80));
+check('...scrolled it into view', await page.evaluate(() => {
+  const rect = document.getElementById('captcha-box').getBoundingClientRect();
+  return rect.top >= 0 && rect.bottom <= window.innerHeight;
+}));
+check('...and spotlighted it', await page.evaluate(
+  () => document.getElementById('captcha-box').style.outline.includes('3px')));
+
 check('no page errors across the whole harness', pageErrors.length === 0, pageErrors.join(' | '));
 
 await browser.close();

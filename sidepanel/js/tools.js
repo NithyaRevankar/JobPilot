@@ -205,6 +205,27 @@ export const TOOL_DEFS = [
         },
       },
     }, []),
+  // CONTRACT-V11 §5. The pre-submit confirmation, as a tool rather than a phrasing of
+  // ask_user. It CLICKS on approval: a dialog whose button says "Submit application" and
+  // which then merely tells the model it *may* submit is a dialog that lies about what the
+  // click did — the model can still error, pick a different control, or be stopped in
+  // between, and the user who pressed Submit would be left with an unsubmitted form and no
+  // reason to think so.
+  toolDef('confirm_submit',
+    'Get the user\'s go-ahead for the FINAL submit and, if they approve, click it. Call this INSTEAD of ' +
+    'ask_user when everything is filled and the only thing left is to submit the application. ' +
+    'The user gets a two-button dialog — Submit or Cancel — and clicks once; they are not asked to type anything. ' +
+    'On approval this CLICKS the button you named, so do not click it again yourself: read_page / read_errors ' +
+    'afterwards to verify the submission actually went through (rule 9), then call done. ' +
+    'If they cancel, the form is left filled and untouched — call done with status "ready_for_review".', {
+      ref: { type: 'string', description: 'Ref of the final submit button, from read_page.' },
+      label: { type: 'string', description: 'The button\'s visible text, e.g. "Submit application" — the user sees this, so it must be what the page really says.' },
+      summary: {
+        type: 'string',
+        description: 'One or two plain sentences: what is being submitted and to whom, e.g. ' +
+          '"Your application for Senior Engineer at Acme, with resume.pdf attached." This is what the user reads before deciding.',
+      },
+    }, ['ref', 'summary']),
   toolDef('request_secret',
     'Ask the user for a credential (password, OTP, 2FA code) and type it into a field. ' +
     'The extension collects the value and fills it directly — you never see it. ' +
@@ -239,6 +260,16 @@ export const TOOL_DEFS = [
     'read_page to see the new state and carry on from there. Do NOT repeat the action yourself.', {
       goal: { type: 'string', description: 'What you are stuck on, in plain language the user can act on: "select the Country Phone Code — the dropdown will not open for me".' },
     }, ['goal']),
+  // Agent-owned, like request_demo: a captcha is a HUMAN handoff, not a page action.
+  // The loop brings the tab forward, the content script spotlights the widget, and the
+  // panel shows a one-button dialog — no typing, because there is nothing to type.
+  toolDef('request_captcha',
+    'Hand a CAPTCHA to the user. Call this the moment read_page/read_errors reports one, or when a submit silently ' +
+    'does nothing (that is how invisible captchas behave). It focuses the tab, scrolls the challenge into view, and ' +
+    'asks the user to confirm once they have solved it. Never try to solve or bypass a captcha yourself, and never ' +
+    'use ask_user for one. When this returns, retry the blocked action, then read_errors.', {
+      reason: { type: 'string', description: 'One short line of context, e.g. "reCAPTCHA checkbox before submit".' },
+    }, []),
   // Panel-orchestrated (§5.2): it binds profile values and routes credential steps
   // through the vault, so it cannot be a plain content tool.
   toolDef('run_macro',
@@ -256,6 +287,11 @@ export const TOOL_DEFS = [
         'blocked = cannot proceed; answered = question answered.',
     },
     summary: { type: 'string', description: 'Short honest summary of the outcome.' },
+    // The application log's two human-readable columns. The model has just read the
+    // posting, so it reports them cleanly — scraping the tab title gets "Careers –
+    // Acme GmbH | Jobs" instead of the job.
+    job_title: { type: 'string', description: 'For submitted / ready_for_review / already_applied: the position\'s title, as the posting states it.' },
+    company: { type: 'string', description: 'For the same statuses: the employer\'s name (the company hiring, not the job board).' },
   }, ['status', 'summary']),
 ];
 
@@ -298,7 +334,13 @@ const CONTENT_TOOLS = new Set([
 // profile and the vault, so both are panel-side too (CONTRACT-V6 §5).
 // `propose_plan` opens a review card and then re-enters executeTool once per approved
 // entry, so it must never be dispatchable itself (CONTRACT-V11 §2).
-const AGENT_OWNED = new Set(['ask_user', 'done', 'request_secret', 'remember', 'request_demo', 'run_macro', 'propose_plan']);
+const AGENT_OWNED = new Set([
+  'ask_user', 'done', 'request_secret', 'remember', 'request_demo', 'run_macro',
+  'request_captcha',
+  // Both open a dialog and then re-enter executeTool with the result, so neither may be
+  // dispatchable itself (CONTRACT-V11 §2, §5).
+  'propose_plan', 'confirm_submit',
+]);
 
 function isRestrictedUrl(url) {
   if (!url) return true;
@@ -632,6 +674,59 @@ async function readErrorsAllFrames(tabId, args) {
       ? `No visible errors in the frames that could be read.${unread}`
       : 'No visible errors.',
   };
+}
+
+/**
+ * The validation text out of a read_errors result, or '' when the page is clean.
+ *
+ * CONTRACT-V11 §6. Lives next to readErrorsAllFrames because it is the only other place
+ * that knows what that function's strings mean — in particular that BOTH all-clear forms
+ * open with "No visible errors", the second being the partial-read variant. A copy of this
+ * predicate anywhere else would be a second reader of a format only this file defines, and
+ * the failure mode is the worst one available: reading a form that refused to submit as a
+ * form that submitted.
+ */
+export function visibleErrorText(res) {
+  if (!res || !res.ok) return '';
+  const text = String(res.result ?? '').trim();
+  if (!text || /^No visible errors/i.test(text)) return '';
+  return text;
+}
+
+/**
+ * A page's validation block, as one short line a person can read.
+ *
+ * read_errors returns everything it found across every frame, with `== FRAME f7 (host) ==`
+ * headers between them — right for the model and wrong for a notice in the transcript,
+ * which has one line to say why an application the user just approved did not go in.
+ */
+export function summarizeErrors(text, maxItems = 3) {
+  const lines = String(text ?? '')
+    .split('\n')
+    .map((l) => l.replace(/^[\s•\-*]+/, '').trim())
+    // Frame headers are plumbing, and a bare "Error"/"Warning" is the label ATS markup puts
+    // in its own element next to the message — neither says anything about what is wrong.
+    .filter((l) => l && !/^==\s*FRAME/i.test(l) && !/^(?:error|warning|alert)!?$/i.test(l));
+  const seen = [];
+  for (const l of lines) {
+    if (!seen.some((s) => s.toLowerCase() === l.toLowerCase())) seen.push(l);
+    if (seen.length >= maxItems) break;
+  }
+  const more = lines.length > seen.length ? ` (+${lines.length - seen.length} more)` : '';
+  return seen.join(' · ') + more;
+}
+
+/**
+ * Does this validation text describe a missing FILE?
+ *
+ * Worth singling out because it is the one class of blocker the agent usually cannot clear
+ * on its own: every other required field can be filled from the profile or asked about, but
+ * "Final certificate — Attachment is required" needs a document that may simply not be in
+ * the store. Saying so turns a dead end into an instruction the user can act on.
+ */
+export function needsAttachment(text) {
+  return /\b(?:attach(?:ment|ed)?|upload(?:ed)?|file|document|resum[eé]|cv|certificate|transcript|portfolio)\b/i.test(String(text ?? ''))
+    && /\b(?:require[ds]?|mandatory|missing|must|needed|please (?:attach|upload|provide))\b/i.test(String(text ?? ''));
 }
 
 /**
@@ -1623,6 +1718,33 @@ export async function fillSecret(getTabId, ref, value, signal, expectHost) {
  *                                    we are recording, which the page must not call control
  * @param {string} status  the current step, as the activity card words it
  */
+/**
+ * The mechanical half of request_captcha: bring the run's tab to the FRONT (the one time
+ * a run may steal focus — the user has to interact with the page and was just told so),
+ * then have every frame point at its challenge. Returns what was found, for the dialog.
+ */
+export async function showCaptchaInTab(getTabId) {
+  let tabId;
+  try {
+    tabId = await getTabId();
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    if (typeof tab.windowId === 'number' && chrome.windows && chrome.windows.update) {
+      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    }
+  } catch { /* focusing is a courtesy; the dialog still says which page */ }
+  // execAllFrames yields {frame, text} for each frame that had something to say.
+  const { results } = await execAllFrames(tabId, 'show_captcha', {});
+  const shown = results.find((r) => /highlighted/.test(r.text || ''));
+  if (shown) return { ok: true, found: shown.text };
+  if (results.length) return { ok: true, found: results[0].text }; // an invisible kind, described
+  return { ok: true, found: '' }; // nothing detected — the dialog still asks, honestly
+}
+
 export function showControl(runId, tabId, mode, status) {
   return chrome.runtime
     .sendMessage({ kind: 'jobpilot:ctrl-on', runId, tabId, mode, status })
@@ -1712,8 +1834,10 @@ export function toolLabel(name, args) {
     // §5 — label the credential kind + target ref, NEVER a value.
     case 'request_secret': return `provide ${args.kind || 'secret'} → ${args.ref || ''}`;
     case 'propose_plan': return planLabel(args);
+    case 'confirm_submit': return `confirm submit → ${truncate(args.label || args.ref, 30)}`;
     case 'remember': return `remember → ${args.platform || 'this portal'}`;
     case 'request_demo': return `ask the user to demonstrate: ${truncate(args.goal, 40)}`;
+    case 'request_captcha': return `captcha → waiting for you${args.reason ? ` (${truncate(args.reason, 36)})` : ''}`;
     case 'run_macro': return `run macro "${truncate(args.name, 30)}"`;
     case 'done': return `done (${args.status || '?'})`;
     default: return name;

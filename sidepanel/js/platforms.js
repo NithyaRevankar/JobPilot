@@ -58,7 +58,21 @@ export const PLATFORMS = [
   {
     key: 'successfactors', label: 'SAP SuccessFactors', rank: 10,
     hosts: [/(^|\.)successfactors\.(com|eu)$/i, /(^|\.)sapsf\.(com|eu)$/i, /(^|\.)jobs2web\.com$/i],
-    dom: ['[id^="careerSite"]', '.jobDescription[data-careersite]'],
+    // "EasyApply---" is the component id prefix of SAP's EasyApply recruiting app — every
+    // control on those pages carries it. It is the fingerprint that matters most here:
+    // employers deploy EasyApply on their own SAP BTP hosts (cfapps.<region>.hana.ondemand.com),
+    // where no host rule can reasonably fire — hana.ondemand.com hosts every kind of SAP
+    // app, so matching the HOST would label half of SAP's cloud as a job portal. The DOM
+    // prefix is precise, employer-independent, and survives the custom domain entirely.
+    dom: ['[id^="careerSite"]', '.jobDescription[data-careersite]', '[id^="EasyApply---"]'],
+  },
+  {
+    key: 'pi_loga', label: 'P&I LOGA', rank: 10,
+    // pi-asp.de is P&I's own ASP hosting (…/bewerber-web/). Tenants on custom domains are
+    // caught by the DOM pass: "LG-" is LOGA's CSS namespace, and the form table plus the
+    // div-buttons carry it on every deployment.
+    hosts: [/(^|\.)pi-asp\.de$/i],
+    dom: ['.LG-FormBox', '.LG-Button', 'input.LG-TextBox'],
   },
   {
     key: 'smartrecruiters', label: 'SmartRecruiters', rank: 10,

@@ -57,7 +57,7 @@ import {
   answerKey,
   getPlaybooks, saveMacro,
 } from '../../js/storage.js';
-import { bindStepsToProfile } from '../../js/tools.js';
+import { bindStepsToProfile, summarizeErrors } from '../../js/tools.js';
 import * as vault from '../../js/vault.js';
 
 import { showToast } from '../components/Toast.jsx';
@@ -723,19 +723,35 @@ function RunView({ running }) {
 
     chime();
     finalizeAssistantBubble();
-    // Settle the live activity row before the dialog replaces it — same reason as
-    // onAskUser: the spinner would otherwise run forever once the modal closes.
-    if (liveActivityRef.current && liveActivityRef.current.step) {
-      onToolEnd({ ok: true, result: `plan: ${fills.length} fields, ${asked.length} questions` });
-    }
+    // Left for the loop to settle, for the same reason as onConfirmSubmit above: the row's
+    // outcome is whether the plan RAN, which is not known until after the card closes and
+    // the fills have been dispatched. onToolEnd is one-shot, so claiming ok:true here would
+    // make a dismissed plan show a tick.
     closeActivityCard();
 
     const saveOption = (settingsRef.current && settingsRef.current.saveAnswers) && asked.length
       ? { label: asked.length === 1 ? 'Save answer to profile' : 'Save these answers to my profile', checked: true }
       : undefined;
 
+    // The chip is built HERE rather than inside the card, because the card is shared with
+    // the Profile tab's resume extraction and the two mean different things by "look at this
+    // one". agent.js supplies the provenance (plan.js provenanceOf); turning it into words
+    // is this screen's business.
+    const planRows = fills.map((row) => ({
+      ...row,
+      warn: row.source === 'inferred',
+      chip: row.source === 'inferred'
+        ? 'worked out'
+        : row.source === 'saved' ? 'you answered before' : `profile · ${row.detail}`,
+      chipTitle: row.source === 'inferred'
+        ? 'JobPilot worked this one out — it is not a value from your profile. Worth a look.'
+        : row.source === 'saved'
+          ? 'An answer you gave on an earlier application'
+          : 'Straight from your Profile tab',
+    }));
+
     const fields = [];
-    if (fills.length) fields.push({ name: 'plan', type: 'plan', label: 'Fields', rows: fills });
+    if (fills.length) fields.push({ name: 'plan', type: 'plan', label: 'Fields', rows: planRows });
     // Never `required`, for the same reason a batched ask_user is not: a blank is a real
     // answer ("I am not telling you that"), and a required box would trap the user in a
     // dialog over one question they cannot answer while nineteen approved fields wait.
@@ -763,7 +779,10 @@ function RunView({ running }) {
       message: messageParts.join(' '),
       fields,
       saveOption,
-      submitLabel: fills.length ? `Fill ${fills.length} field${fills.length === 1 ? '' : 's'}` : 'Answer',
+      // Only for the questions-only card. When there are fills, AskDialog labels the button
+      // from the LIVE tick count instead — a static "Fill 8 fields" goes on promising eight
+      // after you have unticked two, and it is the last thing read before the click.
+      submitLabel: 'Answer',
     });
 
     if (!result) {
@@ -779,7 +798,13 @@ function RunView({ running }) {
     const decoded = decodePlanRows(result.values.plan);
     const approved = fills.map((row, i) => {
       const d = decoded[i];
-      return { ...row, include: Boolean(d && d.include), value: d ? d.value : row.value };
+      const value = d ? d.value : row.value;
+      // An emptied box is an unticked row. The two controls have to agree: typing into a
+      // row re-ticks it (Modal.jsx), so clearing one has to be the other direction, or
+      // "ticked with nothing in it" would fill "" — which on a prefilled field CLEARS a
+      // value the user never asked to lose. normalizePlanFills refuses an empty value from
+      // the model for the same reason; this is the same rule on the user's side of the card.
+      return { ...row, include: Boolean(d && d.include) && Boolean(value.trim()), value };
     });
 
     const answers = asked.map((q, i) => {
@@ -807,9 +832,74 @@ function RunView({ running }) {
 
     return { fills: approved, answers: asked.length ? answers : null };
   }, [
-    addNotice, chime, closeActivityCard, finalizeAssistantBubble, onToolEnd,
+    addNotice, chime, closeActivityCard, finalizeAssistantBubble,
     recordQuestion, run, saveAnswersToProfile,
   ]);
+
+  /**
+   * CONTRACT-V11 §5 — the pre-submit confirmation. Two buttons, one click.
+   *
+   * openConfirm rather than openAsk, and that IS the change: this used to arrive as an
+   * ordinary question, which meant a required text box the user had to type "yes" into and
+   * then a second press to send it. Nothing about approving a submit is a question with a
+   * free-text answer — it has exactly two answers, and both of them are buttons.
+   *
+   * `danger` is deliberately false. It is irreversible, which is the usual argument for
+   * defaulting focus to Cancel — but the user asked for this, has just reviewed it, and the
+   * whole point is that approving takes one action. Focus lands on Submit, so Enter works
+   * too. Esc and Cancel both resolve false, and agent.js reads that as "not approved".
+   */
+  const onConfirmSubmit = useCallback(async ({ label, summary }) => {
+    chime();
+    finalizeAssistantBubble();
+    // NOT pre-settled the way onAskUser settles its row, and the difference matters.
+    // onToolEnd is a ONE-SHOT — it clears the live step, so a later call with the real
+    // outcome finds nothing and returns. Settling here with ok:true would therefore print a
+    // green ✓ on `confirm submit` and keep it there even when the form went on to refuse
+    // the submission, which is the single worst thing this row can claim. closeActivityCard
+    // parks the step in orphanRef instead, and the loop's own onToolEnd settles it with
+    // what actually happened; a Stop mid-dialog is caught by settleOrphanStep.
+    closeActivityCard();
+
+    const button = label ? `“${label}”` : 'the submit button';
+    const ok = await run.openConfirm({
+      title: 'Submit this application?',
+      message: `${summary ? `${summary}\n\n` : ''}Choosing Submit clicks ${button} on the page. This cannot be undone.`,
+      okLabel: 'Submit',
+    });
+
+    // Recorded either way, and in the user's own terms — "did I actually send that one?"
+    // is a question people ask about applications weeks later, and the answer should be in
+    // the transcript rather than inferable from a tool result.
+    addNotice(ok ? 'You approved the submit.' : 'You cancelled the submit — the form is left filled, not sent.',
+      ok ? 'notice-ok' : '');
+    return ok;
+  }, [addNotice, chime, closeActivityCard, finalizeAssistantBubble, run]);
+
+  /**
+   * CONTRACT-V11 §6 — the form refused the submit, in the user's own words.
+   *
+   * This is the moment they were waiting on: they read a summary, pressed Submit, and it
+   * did not go in. Before this the only trace was a tool result inside a collapsed activity
+   * row, so the honest outcome ("Workday wants a certificate you have not uploaded") looked
+   * exactly like the run quietly stalling — and if the model then skipped its verification
+   * step, it looked like success.
+   *
+   * The notice names the page's OWN wording rather than a paraphrase. "Final certificate -
+   * Attachment is required" is the string the portal will still be showing when the user
+   * switches to the tab, and matching it is what makes the two obviously the same problem.
+   */
+  const onSubmitBlocked = useCallback(({ errors, attachment }) => {
+    const summary = summarizeErrors(errors) || 'the form reported a problem';
+    addNotice(
+      `Not submitted — the form is still asking for: ${summary}`
+      + (attachment
+        ? ' · This one needs a file. If it is not in your Documents yet, add it in the Profile tab and JobPilot can attach it.'
+        : ''),
+      'notice-error',
+    );
+    chime();
+  }, [addNotice, chime]);
 
   // §6.2 onRequestSecret — the ONLY place a secret is collected in the panel. The
   // value returned here goes straight back to agent.js → fillSecret. It is NEVER
@@ -949,6 +1039,28 @@ function RunView({ running }) {
    * user just performed the action, and replaying it would perform it twice (and the step
    * they demonstrated may well have been "Submit application").
    */
+  /**
+   * The captcha handoff. A CONFIRM, deliberately — the old path was the model phrasing an
+   * ask_user question, which rendered a text box the user had to type into before Submit
+   * engaged. A captcha needs a human in the PAGE, not prose in the panel: by the time this
+   * dialog is up, the tab is focused and the widget is scrolled into view and highlighted
+   * (agent.js handleRequestCaptcha). One button, no typing.
+   */
+  const onRequestCaptcha = useCallback(async ({ reason, found }) => {
+    chime();
+    const what = found || 'A captcha is blocking this application';
+    const solved = await run.openConfirm({
+      title: 'Your turn — captcha',
+      message: `${what}.\n\nSolve it in the page (the tab is in front and the challenge is highlighted)` +
+        `${reason ? ` — ${reason}` : ''}. When the check shows as passed, click Continue.`,
+      okLabel: 'Continue — I solved it',
+    });
+    addNotice(solved
+      ? 'Captcha handed to you and confirmed solved.'
+      : 'Captcha not confirmed — the run will stop.', solved ? '' : 'notice-error');
+    return Boolean(solved);
+  }, [addNotice, chime, run]);
+
   const onRequestDemo = useCallback(async ({ goal, platform }) => {
     finalizeAssistantBubble();
     if (liveActivityRef.current && liveActivityRef.current.step) onToolEnd({ ok: true, result: goal });
@@ -1218,8 +1330,11 @@ function RunView({ running }) {
       },
       onAskUser,
       onProposePlan,
+      onConfirmSubmit,
+      onSubmitBlocked,
       onRequestSecret,
       onRequestDemo,
+      onRequestCaptcha,
       onStatus: (text) => {
         setRunStatus(text || 'Working…');
       },
@@ -1244,8 +1359,9 @@ function RunView({ running }) {
     },
   }), [
     addNotice, appendAssistantText, chime, closeActivityCard, finalizeAssistantBubble,
-    getTabIdForRun, onAskUser, onProposePlan, onRequestDemo, onRequestSecret, onToolEnd,
-    onToolStart, refreshPortalChip, reloadMemory, renderStats, setPill,
+    getTabIdForRun, onAskUser, onConfirmSubmit, onProposePlan, onRequestCaptcha,
+    onRequestDemo, onRequestSecret, onSubmitBlocked, onToolEnd, onToolStart,
+    refreshPortalChip, reloadMemory, renderStats, setPill,
   ]);
 
   // The runner is created lazily and replaced only by New Chat, exactly as panel.js's

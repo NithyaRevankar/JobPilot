@@ -29,11 +29,16 @@
  *   upload, which is the product.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Icon from '../components/Icon.jsx';
+import { openAsk } from '../components/Modal.jsx';
 import { showToast } from '../components/Toast.jsx';
-import { useDocuments, useProfile } from '../state/store.jsx';
+import { decodePlanRows } from '../modal-queue.js';
+import { useAppShell, useDocuments, useProfile, useSettings } from '../state/store.jsx';
 import { extractDocumentText } from '../../js/doctext.js';
+import {
+  extractProfileFromResume, extractionRows, profileCompleteness,
+} from '../../js/profile-intel.js';
 
 const MAX_DOC_BYTES = 8 * 1024 * 1024;
 
@@ -84,11 +89,66 @@ function PfField({ name, label, type = 'text', placeholder, wide = false, value,
   );
 }
 
+/**
+ * CONTRACT-V12 §2 — how ready this profile is, and what to type next.
+ *
+ * The bar is the least useful thing on it and it is there because people look for one. The
+ * LIST is the feature: the empty fields that actually stop applications, worst first, with
+ * the ones a form has already had to ask about called out — because that is evidence about
+ * the jobs THIS person applies to rather than a general claim about forms.
+ */
+function CompletenessMeter({ profile, onJump }) {
+  const { percent, filled, total, missing } = useMemo(() => profileCompleteness(profile), [profile]);
+  const top = missing.slice(0, 4);
+  const tone = percent >= 90 ? 'ok' : percent >= 55 ? 'warn' : 'low';
+
+  return (
+    <div className="pf-meter">
+      <div className="pf-meter-head">
+        <span className="pf-meter-pct">{percent}% ready</span>
+        <span className="pf-meter-count">{filled} of {total} fields</span>
+      </div>
+      <div className={`pf-meter-track pf-meter-${tone}`}>
+        <div className="pf-meter-fill" style={{ width: `${percent}%` }} />
+      </div>
+      {top.length ? (
+        <>
+          <p className="pf-meter-lead">
+            {/* Named, not counted. "8 fields missing" tells you nothing you can act on. */}
+            Worth filling next — these are what stop an application:
+          </p>
+          <ul className="pf-missing">
+            {top.map((m) => (
+              <li key={m.key}>
+                <button type="button" className="pf-missing-link" onClick={() => onJump(m.key)}>
+                  {m.label}
+                </button>
+                <span className="pf-missing-why">
+                  {/* Evidence outranks the general claim, and says so plainly: this one has
+                      already cost the user an interruption on a real application. */}
+                  {m.asked
+                    ? `a form asked you this ${m.asked === 1 ? 'once' : `${m.asked} times`}`
+                    : m.why}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="pf-meter-lead">Nothing important is missing. The agent has what it needs.</p>
+      )}
+    </div>
+  );
+}
+
 export default function ProfileView() {
   const { profile, updateProfile, saveProfileNow } = useProfile();
   const { documents, addDocument, removeDocument, makeDefaultDocument } = useDocuments();
+  const { settings } = useSettings();
+  const { isConfigured, setTab } = useAppShell();
 
   const [dragover, setDragover] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const fileInputRef = useRef(null);
   const answersRef = useRef(null);
   const focusNewAnswerRef = useRef(false);
@@ -198,6 +258,89 @@ export default function ProfileView() {
     }
   }
 
+  // ------------------------------------------------------- fill from the resume
+  //
+  // CONTRACT-V12 §1. The 25-field wall, answered by the document that already states most
+  // of it. One model call proposes values; the user reviews them in the same card plan mode
+  // uses, per field, and nothing is written until they accept.
+
+  /** The text to read: what the user typed wins over any extraction, as everywhere else. */
+  const resumeSource = useMemo(() => {
+    const typed = String(profile.resumeText || '').trim();
+    if (typed) return typed;
+    const withText = documents.filter((d) => d && String(d.text || '').trim());
+    const preferred = withText.find((d) => d.isDefault) || withText[0];
+    return preferred ? String(preferred.text).trim() : '';
+  }, [profile.resumeText, documents]);
+
+  async function onFillFromResume() {
+    if (!isConfigured()) {
+      showToast('Connect your LLM in Settings first — reading the resume takes one model call', 'error');
+      setTab('settings');
+      return;
+    }
+    setExtracting(true);
+    try {
+      const res = await extractProfileFromResume({ settings, resumeText: resumeSource });
+      if (!res.ok) {
+        showToast(res.error, 'error');
+        return;
+      }
+      const rows = extractionRows(res.values, profile);
+      if (!rows.length) {
+        // Two very different situations, and telling them apart is the difference between
+        // "it is broken" and "it already did its job".
+        showToast(Object.keys(res.values).length
+          ? 'Your profile already matches everything the resume says'
+          : 'Nothing usable could be read from the resume — check the Resume text box below',
+        Object.keys(res.values).length ? 'success' : 'warn');
+        return;
+      }
+
+      const overwrites = rows.filter((r) => r.warn).length;
+      const result = await openAsk({
+        title: 'From your resume',
+        message: `Read ${rows.length} value${rows.length === 1 ? '' : 's'} off your resume. `
+          + (overwrites
+            ? `${overwrites} would replace something already in your profile — those are marked and start unticked, because what you typed wins.`
+            : 'Nothing here overwrites anything you have already filled in.'),
+        fields: [{ name: 'plan', type: 'plan', label: 'Fields', rows }],
+        submitLabel: 'Save',
+      });
+      if (!result) return;
+
+      const decoded = decodePlanRows(result.values.plan);
+      const patch = {};
+      rows.forEach((row, i) => {
+        const d = decoded[i];
+        const value = d ? d.value.trim() : '';
+        // Same rule as the plan card: an emptied box is an unticked row, never a write of ''.
+        if (d && d.include && value) patch[row.key] = value;
+      });
+      const keys = Object.keys(patch);
+      if (!keys.length) {
+        showToast('Nothing was saved — every field was unticked', '');
+        return;
+      }
+      // saveProfileNow, not updateProfile: this is a deliberate bulk write the user just
+      // approved, and it should be on disk before they can navigate away from the tab.
+      await saveProfileNow(patch);
+      showToast(`Saved ${keys.length} field${keys.length === 1 ? '' : 's'} from your resume`, 'success');
+    } catch (err) {
+      showToast(`Could not read the resume: ${err.message}`, 'error');
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  /** Jump the user to a field the meter named, and put the caret in it. */
+  const jumpToField = (key) => {
+    const el = document.getElementById(`pf-${key}`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.focus({ preventScroll: true });
+  };
+
   // --------------------------------------------------------------- saved answers
 
   const savedAnswers = profile.savedAnswers;
@@ -230,6 +373,31 @@ export default function ProfileView() {
 
   return (
     <div className="scroll-area">
+
+      {/* First, because it is the answer to "what do I do here" — and because the button
+          under it is the one that means you may not have to do the rest by hand. */}
+      <div className="section">
+        <h3 className="section-title">Your profile</h3>
+        <CompletenessMeter profile={profile} onJump={jumpToField} />
+        <div className="pf-fill-row">
+          <button
+            id="btn-fill-from-resume"
+            className="btn-primary btn-small"
+            disabled={extracting || !resumeSource}
+            title={resumeSource
+              ? 'One model call reads your resume and proposes values — you review each one before anything is saved'
+              : 'Add a resume below first, or paste it into Resume text'}
+            onClick={onFillFromResume}
+          >
+            {extracting ? 'Reading your resume…' : 'Fill from my resume'}
+          </button>
+          <span className="pf-fill-hint">
+            {resumeSource
+              ? 'Proposes values from your resume. You review every one before it is saved — nothing is written until you say so.'
+              : 'Add a resume below and this can fill most of this page for you.'}
+          </span>
+        </div>
+      </div>
 
       <div className="section">
         <h3 className="section-title">Documents</h3>

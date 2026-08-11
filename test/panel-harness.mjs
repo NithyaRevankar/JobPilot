@@ -732,8 +732,9 @@ resetWorld();
 
 resetWorld();
 {
-  // A populated install: every one of the eight keys, including the awkward ones.
+  // A populated install: every one of the backup keys, including the awkward ones.
   await storage.saveSettings({ baseUrl: 'https://api.openai.com/v1/', apiKey: 'sk-secret', model: 'gpt-4o-mini', maxSteps: 0 });
+  await storage.logApplication({ status: 'submitted', jobTitle: 'Roundtrip Engineer', company: 'Acme', url: 'https://a.test/j' });
   await storage.saveProfile({ fullName: 'Ada Lovelace', savedAnswers: [{ q: 'Why us?', a: 'Analytical engines' }] });
   await storage.saveDocument({ name: 'cv.pdf', mime: 'application/pdf', size: 12, dataBase64: 'AAAA', text: 'Ada' });
   await storage.saveChats(storage.DEFAULT_RUN_ID, [{ role: 'user', content: 'hello' }]);
@@ -1265,11 +1266,14 @@ const settleTab = (id) => {
     setTimeout(() => chrome.tabs.onUpdated.fire(id, { status: 'complete' }), ms);
   }
 };
-const scriptedRun = async (rounds, onDone, opts = {}) => {
+const scriptedRun = async (rounds, cbExtra, opts = {}) => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => (rounds.shift())();
+  // cbExtra: a bare function is onDone (the original signature); an object is merged into
+  // the callback bag, for tests that need onRequestCaptcha and friends.
+  const over = typeof cbExtra === 'function' ? { onDone: cbExtra } : (cbExtra || {});
   const runner = new AgentRunner({
-    getTabId, callbacks: cb(onDone ? { onDone } : {}), ...opts,
+    getTabId, callbacks: cb(over), ...opts,
   });
   try {
     await runner.run('apply to this job');
@@ -1503,6 +1507,9 @@ resetWorld();
     /follows it automatically/.test(p) && /read_page before anything else/.test(p));
   check('...and that captchas belong to the user, including invisible ones (rule 18)',
     /CAPTCHAs are the user's job/.test(p) && /invisible captcha/.test(p));
+  check('...routed through request_captcha, never a free-text ask_user — a captcha has ' +
+    'nothing to type about',
+    /Call request_captcha/.test(p) && /do NOT ask_user about it/.test(p));
   check('...and carries the application craft: salary midpoint, hourly ÷ 2080',
     /## Application craft/.test(p) && /midpoint/.test(p) && /2080/.test(p));
   check('...distrust of ATS parsing, and the pre-submit review pass',
@@ -1537,6 +1544,120 @@ resetWorld();
     'own words as the summary',
     Boolean(outcome) && outcome.status === 'already_applied'
     && /bereits/.test(outcome.summary), JSON.stringify(outcome));
+}
+
+// ================================= the application log — capture at the moment of done
+//
+// The tracker. Written by the agent loop itself, because `done` is the one moment
+// everything is in hand: the outcome, the model's clean job_title/company from the
+// posting, the tab's real URL, and the detected portal.
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm' });
+  const runner = await scriptedRun([
+    () => toolCallSse('t1', 'done', {
+      status: 'submitted', summary: 'in',
+      job_title: 'Senior Test Manager (m/w/d)', company: 'Mecklenburgische',
+    }),
+  ], null, { runId: 'run-log-1' });
+  runner.memory = null;
+
+  const apps = await storage.getApplications();
+  check('THE POINT: a submitted application is recorded, automatically, at done',
+    apps.length === 1, `${apps.length} record(s)`);
+  const a = apps[0] || {};
+  check('...with the model\'s clean title and company — not a scraped tab title',
+    a.jobTitle === 'Senior Test Manager (m/w/d)' && a.company === 'Mecklenburgische',
+    JSON.stringify({ t: a.jobTitle, c: a.company }));
+  check('...and the tab\'s real URL and host',
+    /jobs\.acme\.com/.test(a.url) && a.host === 'jobs.acme.com', a.url);
+  check('...stamped with the run that did it', a.runId === 'run-log-1', a.runId);
+
+  // already_applied IS tracking data; blocked and answered are not applications.
+  await scriptedRun([
+    () => toolCallSse('t2', 'done', { status: 'already_applied', summary: 'bereits beworben', job_title: 'Kasse', company: 'Kaufland' }),
+  ]);
+  await scriptedRun([
+    () => toolCallSse('t3', 'done', { status: 'blocked', summary: 'login wall' }),
+  ]);
+  await scriptedRun([
+    () => toolCallSse('t4', 'done', { status: 'answered', summary: 'just a question' }),
+  ]);
+  const after = await storage.getApplications();
+  check('already_applied is logged too — knowing you already applied IS tracking',
+    after.length === 2 && after.some((r) => r.status === 'already_applied'),
+    after.map((r) => r.status).join(','));
+  check('...while blocked and answered are NOT — neither is an application',
+    !after.some((r) => r.status === 'blocked' || r.status === 'answered'));
+  check('newest first — the list reads like a feed', after[0].company === 'Kaufland');
+
+  // The CSV the Export button produces. Quoting is the whole test: a job title with a
+  // comma or quotes is the NORMAL case in German postings, not the edge case.
+  const csv = storage.applicationsToCsv([
+    { submittedAt: 0, status: 'submitted', jobTitle: 'Engineer, "Platform" (m/w/d)', company: 'Acme GmbH & Co. KG', url: 'https://x.test/a?b=1', portal: 'workday', host: 'x.test' },
+  ]);
+  const lines = csv.split('\r\n');
+  check('the CSV has a header row Excel and Sheets both open cleanly',
+    lines[0] === 'date,status,job_title,company,url,portal,host', lines[0]);
+  check('...and commas/quotes inside a title are quoted, not column-splitting',
+    lines[1].includes('"Engineer, ""Platform"" (m/w/d)"'), lines[1]);
+
+  check('the log rides in every backup — it is in BACKUP_KEYS',
+    storage.BACKUP_KEYS.includes('applications'));
+  const junk = storage.normalizeApplications([
+    { status: 'submitted', jobTitle: 'ok', submittedAt: 5 },
+    { status: 'nonsense', jobTitle: 'coerced', submittedAt: 4 },
+    { jobTitle: '', company: '', url: '' },   // identifies nothing — dropped
+    'not even an object',
+  ]);
+  check('an imported (hand-editable) log is normalized: junk dropped, statuses coerced',
+    junk.length === 2 && junk.every((r) => storage.APPLICATION_STATUSES.includes(r.status)),
+    JSON.stringify(junk.map((r) => r.status)));
+}
+
+// ============================ request_captcha — a HANDOFF with a button, not a question
+//
+// The old path was the model calling ask_user with "please check the box and let me
+// know", which rendered a text field the user had to type prose into before Submit
+// engaged. A captcha has nothing to type about: the tab comes forward, the page
+// spotlights the widget (show_captcha, in every frame), and the panel shows one button.
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm' });
+  frameHandlers.set('1:0', (tool) => {
+    if (tool === 'show_captcha') return { ok: true, result: 'reCAPTCHA is on screen and highlighted.' };
+    return { ok: true, result: 'Clicked "Submit".' };
+  });
+
+  let handed = null;
+  const runner = await scriptedRun([
+    () => toolCallSse('t1', 'request_captcha', { reason: 'checkbox before submit' }),
+    () => toolCallSse('t2', 'done', { status: 'submitted', summary: 'in' }),
+  ], { onRequestCaptcha: async (info) => { handed = info; return true; } });
+
+  check('the page is told to SHOW the captcha before the user is asked anything',
+    sent.some((s) => s.tool === 'show_captcha'));
+  check('...and the panel dialog receives what the page found, plus the model\'s reason',
+    Boolean(handed) && /highlighted/.test(handed.found) && handed.reason === 'checkbox before submit',
+    JSON.stringify(handed));
+  const solvedMsg = runner.messages.find((m) => m.role === 'tool' && /captcha is solved/.test(m.content));
+  check('a confirmed solve tells the model to RETRY the blocked action',
+    Boolean(solvedMsg) && /Retry the action/.test(solvedMsg.content),
+    solvedMsg ? solvedMsg.content.slice(0, 80) : '(no tool result)');
+}
+
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm' });
+  frameHandlers.set('1:0', () => ({ ok: true, result: 'reCAPTCHA is on screen and highlighted.' }));
+  const runner = await scriptedRun([
+    () => toolCallSse('t1', 'request_captcha', {}),
+    () => toolCallSse('t2', 'done', { status: 'blocked', summary: 'captcha' }),
+  ], { onRequestCaptcha: async () => false });
+  const declinedMsg = runner.messages.find((m) => m.role === 'tool' && /did not confirm/.test(m.content));
+  check('a DECLINED captcha sends the model to done(blocked), not into a retry loop',
+    Boolean(declinedMsg) && /status "blocked"/.test(declinedMsg.content),
+    declinedMsg ? declinedMsg.content.slice(0, 90) : '(no tool result)');
 }
 
 // ==================================================== CONTRACT-V11 — plan mode
@@ -1855,11 +1976,445 @@ resetWorld();
     Boolean(seen) && seen.unknowns.length === 3, seen ? JSON.stringify(seen.unknowns.map((q) => q.question)) : '(not shown)');
 }
 
+// ============================== CONTRACT-V11 §5 — the submit confirmation is two buttons
+//
+// It used to be an ask_user: a required text box the user typed "yes" into, then a second
+// press to send it. What the word bought was permission for a click that happened LATER, as
+// its own step — so a dialog button reading Submit could be pressed and nothing be
+// submitted. Approval and click are one call now, and these are the three ways that can go.
+
+// --- approved: the click happens inside the same call
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', autoSubmit: false });
+  frameHandlers.set('1:0', (tool) => {
+    if (tool === 'click') return { ok: true, result: 'Clicked "Submit application".' };
+    if (tool === 'read_errors') return { ok: true, result: 'No visible errors.' };
+    return { ok: true, result: 'Application submitted ✓' };
+  });
+
+  let asked = null;
+  const runner = await scriptedRun([
+    () => toolCallSse('s1', 'confirm_submit', { ref: 'e9', label: 'Submit application', summary: 'Senior Engineer at Acme.' }),
+    () => toolCallSse('s2', 'read_page', {}),
+    () => toolCallSse('s3', 'done', { status: 'submitted', summary: 'in' }),
+  ], null, { callbacks: cb({ onConfirmSubmit: async (a) => { asked = a; return true; } }) });
+
+  check('V11 §5 the panel is asked with the button label and a summary the user can read',
+    Boolean(asked) && asked.label === 'Submit application' && /Acme/.test(asked.summary),
+    JSON.stringify(asked));
+  check('THE POINT: approving CLICKS — a dialog whose button says Submit and which does not ' +
+    'submit is a dialog that lies',
+    sent.some((s) => s.tool === 'click' && s.args.ref === 'e9'),
+    JSON.stringify(sent.map((s) => s.tool)));
+  const res = runner.messages.find((m) => m.role === 'tool' && /approved the submit/.test(m.content || ''));
+  check('...and the model is sent straight on to VERIFY rather than to click again',
+    Boolean(res) && /confirm it actually went through/i.test(res.content),
+    res ? res.content.replace(/\n/g, ' ').slice(0, 110) : '(no result)');
+}
+
+// --- cancelled: nothing is clicked, and "blocked" is not the word for it
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', autoSubmit: false });
+  frameHandlers.set('1:0', (tool) => (tool === 'read_errors'
+    ? { ok: true, result: 'No visible errors.' }
+    : { ok: true, result: 'ok' }));
+
+  const runner = await scriptedRun([
+    () => toolCallSse('s1', 'confirm_submit', { ref: 'e9', label: 'Submit', summary: 'x' }),
+    () => toolCallSse('s2', 'done', { status: 'ready_for_review', summary: 'left filled' }),
+  ], null, { callbacks: cb({ onConfirmSubmit: async () => false }) });
+
+  check('V11 §5 Cancel clicks NOTHING',
+    !sent.some((s) => s.tool === 'click'), JSON.stringify(sent.map((s) => s.tool)));
+  const res = runner.messages.find((m) => m.role === 'tool' && /did NOT approve/.test(m.content || ''));
+  check('THE POINT: and the model is told to leave the form alone and hand it back — not to ' +
+    'try another route to the same click',
+    Boolean(res) && /do not try to submit another way/i.test(res.content) && /ready_for_review/.test(res.content),
+    res ? res.content.replace(/\n/g, ' ').slice(-100) : '(no result)');
+}
+
+// --- a click that FAILS after approval is not the same as a refusal
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', autoSubmit: false });
+  frameHandlers.set('1:0', (tool) => {
+    if (tool === 'click') return { ok: false, error: 'A cookie banner is covering this element.' };
+    if (tool === 'read_errors') return { ok: true, result: 'No visible errors.' };
+    return { ok: true, result: 'ok' };
+  });
+
+  const runner = await scriptedRun([
+    () => toolCallSse('s1', 'confirm_submit', { ref: 'e9', label: 'Submit', summary: 'x' }),
+    () => toolCallSse('s2', 'done', { status: 'blocked', summary: 'banner' }),
+  ], null, { callbacks: cb({ onConfirmSubmit: async () => true }) });
+
+  const res = runner.messages.find((m) => m.role === 'tool' && /click FAILED/.test(m.content || ''));
+  check('THE POINT: the user approved but the click was refused — the model must not read ' +
+    'that as "they said no", and must never report it as submitted',
+    Boolean(res) && /cookie banner/.test(res.content) && /NOT submitted/.test(res.content)
+    && /do not call done with status "submitted"/i.test(res.content),
+    res ? res.content.replace(/\n/g, ' ').slice(0, 120) : '(no result)');
+}
+
+// --- auto-submit on: the setting the user chose is honoured, not second-guessed
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', autoSubmit: true });
+  frameHandlers.set('1:0', (tool) => (tool === 'read_errors'
+    ? { ok: true, result: 'No visible errors.' }
+    : { ok: true, result: 'Clicked "Submit".' }));
+
+  let dialogs = 0;
+  await scriptedRun([
+    () => toolCallSse('s1', 'confirm_submit', { ref: 'e9', label: 'Submit', summary: 'x' }),
+    () => toolCallSse('s2', 'done', { status: 'submitted', summary: 'in' }),
+  ], null, { callbacks: cb({ onConfirmSubmit: async () => { dialogs++; return true; } }) });
+
+  check('V11 §5 with auto-submit ON no dialog is raised — popping one would be the extension ' +
+    'overriding a setting because it disapproved of it',
+    dialogs === 0 && sent.some((s) => s.tool === 'click'),
+    `${dialogs} dialogs, tools: ${sent.map((s) => s.tool).join(',')}`);
+}
+
+// ================== CONTRACT-V11 §6 — a form that REFUSES the submit must say so
+//
+// The real report this exists for: a portal answered a submit with "Please go back to these
+// steps before submitting your application — Error: Final certificate - Attachment is
+// required." The CLICK succeeded — the button existed and was pressed — so nothing in the
+// tool result contradicted it, and the only thing between that and "Application submitted ✓"
+// in the chat was the model remembering to verify. That is a rule, not a guarantee, and
+// being wrong means telling someone they applied for a job when they did not.
+
+const WORKDAY_REFUSAL =
+  'Please go back to these steps before submitting your application\n'
+  + 'Error\nFinal certificate - Attachment is required.';
+
+// --- the pure helpers that read the page's own wording
+{
+  const { visibleErrorText, summarizeErrors, needsAttachment } = await import('../sidepanel/js/tools.js');
+  check('V11 §6 both all-clear wordings read as CLEAN — the partial-read one too',
+    visibleErrorText({ ok: true, result: 'No visible errors.' }) === ''
+    && visibleErrorText({ ok: true, result: 'No visible errors in the frames that could be read.' }) === '');
+  check('...and real validation text reads as NOT clean',
+    visibleErrorText({ ok: true, result: WORKDAY_REFUSAL }) !== '');
+  check('THE POINT: a read_errors that FAILED is not an all-clear — it is "we do not know", ' +
+    'and treating it as clean is how a refused submit gets reported as submitted',
+    visibleErrorText({ ok: false, error: 'frame unreachable' }) === '');
+  check('...the summary keeps the portal\'s own words and drops the plumbing',
+    summarizeErrors(WORKDAY_REFUSAL) === 'Please go back to these steps before submitting your application · Final certificate - Attachment is required.',
+    summarizeErrors(WORKDAY_REFUSAL));
+  check('...a bare "Error" label next to the message is not itself a message',
+    !/(^|·\s)Error(\s·|$)/.test(summarizeErrors(WORKDAY_REFUSAL)));
+  check('...and a missing FILE is recognised as the blocker the agent cannot clear alone',
+    needsAttachment(WORKDAY_REFUSAL) === true
+    && needsAttachment('Attachment is required') === true
+    && needsAttachment('Please enter a valid phone number') === false);
+}
+
+// --- end to end: the click lands, the form bounces it, everyone is told
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', autoSubmit: false });
+  let clicked = false;
+  frameHandlers.set('1:0', (tool) => {
+    if (tool === 'click') { clicked = true; return { ok: true, result: 'Clicked "Submit".' }; }
+    // Clean before the click, refusing after it — exactly how a portal behaves.
+    if (tool === 'read_errors') {
+      return clicked ? { ok: true, result: WORKDAY_REFUSAL } : { ok: true, result: 'No visible errors.' };
+    }
+    return { ok: true, result: 'ok' };
+  });
+
+  let told = null;
+  const runner = await scriptedRun([
+    () => toolCallSse('s1', 'confirm_submit', { ref: 'e9', label: 'Submit', summary: 'x' }),
+    () => toolCallSse('s2', 'done', { status: 'blocked', summary: 'needs a certificate' }),
+  ], null, {
+    callbacks: cb({
+      onConfirmSubmit: async () => true,
+      onSubmitBlocked: (info) => { told = info; },
+    }),
+  });
+
+  check('V11 §6 THE POINT: the panel checks whether the form took it — this is not the ' +
+    'model\'s to skip, and a successful CLICK is not a successful SUBMIT',
+    Boolean(told) && /Attachment is required/.test(told.errors), JSON.stringify(told && told.errors));
+  check('...and it knows this particular blocker needs a FILE the agent may not have',
+    Boolean(told) && told.attachment === true, JSON.stringify(told && told.attachment));
+
+  const res = runner.messages.find((m) => m.role === 'tool' && /REFUSED the submission/.test(m.content || ''));
+  check('...the model is told the application was NOT submitted, in the page\'s own words',
+    Boolean(res) && /Final certificate - Attachment is required/.test(res.content)
+    && /NOT submitted/.test(res.content),
+    res ? res.content.replace(/\n/g, ' ').slice(0, 120) : '(no result)');
+  check('THE OTHER POINT: and forbidden from calling done("submitted") — reporting a job ' +
+    'application as sent when it was not is the worst thing this tool can do',
+    Boolean(res) && /Do NOT call done with status "submitted"/i.test(res.content));
+  check('...with the attachment route spelled out: upload_file, else ask the user to add it',
+    Boolean(res) && /upload_file/.test(res.content) && /Profile tab/.test(res.content));
+}
+
+// --- a clean page after the click is reported as clean, not as proof of success
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', autoSubmit: false });
+  frameHandlers.set('1:0', (tool) => (tool === 'click'
+    ? { ok: true, result: 'Clicked "Submit".' }
+    : { ok: true, result: 'No visible errors.' }));
+
+  let told = null;
+  const runner = await scriptedRun([
+    () => toolCallSse('s1', 'confirm_submit', { ref: 'e9', label: 'Submit', summary: 'x' }),
+    () => toolCallSse('s2', 'done', { status: 'submitted', summary: 'in' }),
+  ], null, { callbacks: cb({ onConfirmSubmit: async () => true, onSubmitBlocked: (i) => { told = i; } }) });
+
+  const res = runner.messages.find((m) => m.role === 'tool' && /No validation errors are showing/.test(m.content || ''));
+  check('V11 §6 a clean page after the click raises no alarm',
+    told === null && Boolean(res), JSON.stringify(told));
+  check('...but it is still not called a success — "no errors" is not a confirmation number, ' +
+    'so the model is sent to look for one',
+    Boolean(res) && /confirm it actually went through/i.test(res.content),
+    res ? res.content.replace(/\n/g, ' ').slice(-90) : '(no result)');
+}
+
+// --- do not spend the user's one click on a submit the page is already refusing
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm', autoSubmit: false });
+  frameHandlers.set('1:0', (tool) => (tool === 'read_errors'
+    ? { ok: true, result: WORKDAY_REFUSAL }
+    : { ok: true, result: 'Clicked "Submit".' }));
+
+  let dialogs = 0;
+  const runner = await scriptedRun([
+    () => toolCallSse('s1', 'confirm_submit', { ref: 'e9', label: 'Submit', summary: 'x' }),
+    () => toolCallSse('s2', 'confirm_submit', { ref: 'e9', label: 'Submit', summary: 'x' }),
+    () => toolCallSse('s3', 'done', { status: 'blocked', summary: 'x' }),
+  ], null, { callbacks: cb({ onConfirmSubmit: async () => { dialogs++; return true; } }) });
+
+  const pre = runner.messages.find((m) => m.role === 'tool' && /Not asking the user yet/.test(m.content || ''));
+  check('V11 §6 a page already showing unresolved problems does not get to interrupt the ' +
+    'user for approval — the submit would only bounce',
+    Boolean(pre) && /Attachment is required/.test(pre.content),
+    pre ? pre.content.replace(/\n/g, ' ').slice(0, 100) : '(the user was asked anyway)');
+  check('THE POINT: but it fires ONCE — a page that keeps a harmless notice permanently on ' +
+    'screen must not become one the user can never submit at all',
+    dialogs === 1, `${dialogs} dialogs after the retry`);
+}
+
+// ================ CONTRACT-V12 — the 25-field wall, and what replaces it
+//
+// Nobody fills eight sections on the day they install an extension, so the common first run
+// is against a profile holding a name and an email — and then the agent stops to ask for
+// everything else, one application at a time. Three answers: read the resume, rank what is
+// actually missing, and say plainly when setup is done.
+
+const intel = await import('../sidepanel/js/profile-intel.js');
+
+// --- what a resume may and may not answer
+{
+  const ex = new Set(intel.EXTRACTABLE);
+  check('V12 §1 a resume can answer the plain facts it states',
+    ['fullName', 'email', 'phone', 'currentTitle', 'currentCompany', 'city'].every((k) => ex.has(k)));
+  check('THE POINT: and it may NEVER answer visa status, sponsorship, salary or notice — a ' +
+    'resume does not state them, so a model asked for them produces something plausible, ' +
+    'which is fabrication wearing a "from your resume" badge',
+    !['workAuth', 'sponsorshipNeeded', 'salary', 'noticePeriod'].some((k) => ex.has(k)));
+  check('...nor any self-identification field, which is never inferred by anyone',
+    !['gender', 'pronouns', 'ethnicity', 'veteranStatus', 'disabilityStatus'].some((k) => ex.has(k)));
+  check('...and the tool schema offers exactly the extractable set, so a field nobody meant ' +
+    'to be extractable cannot arrive just because the model included it',
+    Object.keys(intel.EXTRACT_TOOL.function.parameters.properties).join() === intel.EXTRACTABLE.join());
+}
+
+// --- the model's output is a whitelist away from the profile
+{
+  const clean = intel.sanitizeExtraction(JSON.stringify({
+    fullName: '  Jane   Doe ',
+    phone: 'N/A',
+    email: 'not stated',
+    yearsExperience: 7,
+    city: 'Bengaluru',
+    salary: '$200k',
+    gender: 'Female',
+    portfolio: 'x'.repeat(400),
+  }));
+  check('V12 §1 whitespace is normalised, and a number is accepted for years',
+    clean.fullName === 'Jane Doe' && clean.yearsExperience === '7', JSON.stringify(clean));
+  check('THE POINT: "N/A" and "not stated" are DROPPED — writing those into somebody\'s ' +
+    'phone number is worse than leaving it blank',
+    !('phone' in clean) && !('email' in clean), JSON.stringify(clean));
+  check('...a field outside the whitelist cannot get through even when the model sends it',
+    !('salary' in clean) && !('gender' in clean), JSON.stringify(clean));
+  check('...and an absurdly long value is refused rather than pasted into a form later',
+    !('portfolio' in clean));
+  check('...garbage in gives {} out, never a throw',
+    Object.keys(intel.sanitizeExtraction('{{{')).length === 0
+    && Object.keys(intel.sanitizeExtraction(null)).length === 0);
+}
+
+// --- the review rows: what is safe to tick by default
+{
+  const rows = intel.extractionRows(
+    { fullName: 'Jane Doe', city: 'Bengaluru', currentTitle: 'Staff Engineer' },
+    { fullName: '', city: 'Mumbai', currentTitle: 'staff engineer' },
+  );
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
+  check('V12 §1 an empty field starts TICKED — filling those is the entire point',
+    byKey.fullName.include === true && byKey.fullName.chip === 'empty now', JSON.stringify(byKey.fullName));
+  check('THE POINT: a row that would OVERWRITE something starts unticked and is marked — the ' +
+    'rule everywhere in this codebase is that what the user typed beats a machine extraction',
+    byKey.city.include === false && byKey.city.warn === true && /replaces/.test(byKey.city.chip),
+    JSON.stringify(byKey.city));
+  check('...and a value that only differs in case is not a proposal at all, so it is dropped ' +
+    '— a card padded with rows that change nothing is a card people stop reading',
+    !('currentTitle' in byKey), JSON.stringify(rows.map((r) => r.key)));
+}
+
+// --- ranking: the part that is evidence rather than opinion
+{
+  const bare = intel.profileCompleteness({});
+  check('V12 §2 an empty profile is 0% and every field is listed',
+    bare.percent === 0 && bare.missing.length === intel.PROFILE_FIELDS.length,
+    `${bare.percent}%, ${bare.missing.length} missing`);
+  check('...the worst-first order puts the fields every form asks for at the top',
+    bare.missing.slice(0, 3).every((m) => m.tier === 'always'),
+    bare.missing.slice(0, 3).map((m) => m.label).join(', '));
+
+  const weighted = intel.profileCompleteness({ addressLine2: 'Flat 3', github: 'gh', portfolio: 'p' });
+  check('THE POINT: the meter is WEIGHTED — three incidental fields must not read as more ' +
+    'progress than a phone number, which is the vanity number this replaces',
+    weighted.percent < 10, `${weighted.percent}% for three "sometimes" fields`);
+
+  const asked = intel.profileCompleteness({
+    fullName: 'Jane', email: 'j@x.com', phone: '1',
+    savedAnswers: [
+      { q: 'What is your notice period?', a: '2 weeks' },
+      { q: 'When can you start? (notice period)', a: '2 weeks' },
+    ],
+  });
+  const notice = asked.missing.find((m) => m.key === 'noticePeriod');
+  check('THE OTHER POINT: a field a real form has already asked about outranks one with only ' +
+    'a tier — that is evidence about THIS person\'s applications, not a claim about forms',
+    Boolean(notice) && notice.asked === 2 && asked.missing[0].key === 'noticePeriod',
+    `${asked.missing[0].key} first; notice asked ${notice && notice.asked}×`);
+
+  // A question is about ONE thing. Crediting every field it happens to mention looks
+  // harmless and is not: "employer" sits inside a question about the notice period, and
+  // because currentCompany is a tier above noticePeriod the false match OUTRANKED the true
+  // one and the meter recommended the wrong field.
+  const generic = intel.rankMissing({
+    savedAnswers: [
+      { q: 'What is your notice period at your current employer?', a: '2 weeks' },
+      { q: 'Notice period?', a: '2 weeks' },
+    ],
+  });
+  const byKey = Object.fromEntries(generic.map((m) => [m.key, m]));
+  check('THE MATCH: a question credits only its most specific field — a short generic alias ' +
+    '("employer", "company", "role") inside a question about something else is not evidence',
+    byKey.noticePeriod.asked === 2 && byKey.currentCompany.asked === 0,
+    `notice ${byKey.noticePeriod.asked}, employer ${byKey.currentCompany.asked}`);
+
+  // …but only so far. The promotion is capped at two tiers precisely so evidence about one
+  // field can never bury the ones without which no application can be submitted at all.
+  const bothMissing = intel.profileCompleteness({
+    savedAnswers: [
+      { q: 'notice period?' }, { q: 'notice period again?' },
+      { q: 'notice period a third time?' }, { q: 'and your notice period?' },
+    ],
+  });
+  check('THE CAP: four asks about a notice period still do not outrank a missing phone ' +
+    'number — no amount of evidence makes a form submittable without the always-fields',
+    bothMissing.missing.findIndex((m) => m.key === 'phone')
+      < bothMissing.missing.findIndex((m) => m.key === 'noticePeriod'),
+    bothMissing.missing.slice(0, 4).map((m) => m.key).join(' > '));
+}
+
+// --- the fields that are complete when blank
+{
+  const selfId = ['gender', 'pronouns', 'ethnicity', 'veteranStatus', 'disabilityStatus'];
+  check('V12 §2 THE POINT: self-identification is NOT counted as missing — a blank there is ' +
+    'a complete answer (the form\'s decline option), and nagging somebody toward disclosing ' +
+    'a protected characteristic to raise a percentage is not a thing this extension does',
+    !intel.PROFILE_FIELDS.some((f) => selfId.includes(f.key))
+    && !intel.rankMissing({}).some((m) => selfId.includes(m.key)));
+}
+
+// --- the checklist finishes, and then it is gone
+{
+  const none = intel.setupSteps({ configured: false, profile: {}, documents: [] });
+  check('V12 §3 a fresh install has all three steps open',
+    none.length === 3 && none.every((s) => !s.done), JSON.stringify(none.map((s) => s.done)));
+  check('...and each one names the tab that completes it, so "Connect an LLM" is a route ' +
+    'rather than an error message',
+    none.every((s) => s.tab));
+
+  const attached = intel.setupSteps({
+    configured: true,
+    profile: { fullName: 'J', email: 'e', phone: 'p' },
+    documents: [{ name: 'cv.pdf', text: '' }],
+  });
+  check('THE POINT: a resume whose text could NOT be read does not tick the resume box — ' +
+    'attaching a scan leaves the agent asking your job title on every application',
+    attached.find((s) => s.key === 'resume').done === false);
+
+  const done = intel.setupSteps({
+    configured: true,
+    profile: { fullName: 'J', email: 'e', phone: 'p' },
+    documents: [{ name: 'cv.pdf', text: 'Jane Doe, Staff Engineer' }],
+  });
+  check('...and a real one does, at which point nothing is left and the strip disappears',
+    done.every((s) => s.done));
+  check('...pasted resume text counts too — it is the same thing to the agent',
+    intel.setupSteps({ configured: true, profile: { resumeText: 'x' }, documents: [] })
+      .find((s) => s.key === 'resume').done === true);
+}
+
+// --- end to end against a stubbed provider
+resetWorld();
+{
+  await storage.saveSettings({ provider: 'openai', baseUrl: 'https://llm.test/v1', apiKey: 'k', model: 'm' });
+  const settings = await storage.getSettings();
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => toolCallSse('x1', 'profile_fields', {
+    fullName: 'Jane Doe', email: 'jane@example.com', currentTitle: 'Staff Engineer', salary: '$200k',
+  });
+  let res;
+  try {
+    res = await intel.extractProfileFromResume({ settings, resumeText: 'Jane Doe — Staff Engineer at Acme.' });
+  } finally { globalThis.fetch = realFetch; }
+
+  check('V12 §1 the extraction returns the values the model read',
+    res.ok && res.values.fullName === 'Jane Doe' && res.values.currentTitle === 'Staff Engineer',
+    JSON.stringify(res));
+  check('...with the un-extractable one dropped on the way through',
+    res.ok && !('salary' in res.values), JSON.stringify(res.values));
+
+  const empty = await intel.extractProfileFromResume({ settings, resumeText: '   ' });
+  check('...and no resume text is refused before any request is made',
+    !empty.ok && /no resume text/i.test(empty.error), empty.error);
+
+  // A model with no tool support answers in prose. That is the same failure that makes the
+  // agent chat instead of act, and it deserves the same name rather than "nothing found".
+  globalThis.fetch = async () => sse([{ choices: [{ delta: { content: 'Sure! Here is the info.' } }] }]);
+  let prose;
+  try {
+    prose = await intel.extractProfileFromResume({ settings, resumeText: 'Jane Doe' });
+  } finally { globalThis.fetch = realFetch; }
+  check('THE POINT: a model without tool calling is NAMED — it is the same root cause as ' +
+    '"the agent chats but never acts", and "nothing found" would send the user hunting',
+    !prose.ok && /tool\/function calling/.test(prose.error), prose.error);
+}
+
 // ============================================================== tool definitions
 {
   const names = TOOL_DEFS.map((t) => t.function.name);
   check('every tool the loop dispatches has a definition the model can see',
-    ['read_page', 'find', 'dom_act', 'run_macro', 'request_demo', 'remember', 'request_secret', 'propose_plan']
+    ['read_page', 'find', 'dom_act', 'run_macro', 'request_demo', 'remember', 'request_secret',
+      'propose_plan', 'confirm_submit', 'request_captcha']
       .every((n) => names.includes(n)),
     `${names.length} tools`);
   assert.ok(names.length > 0);

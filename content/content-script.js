@@ -191,13 +191,44 @@
    * EXCEPT file inputs (hidden behind styled buttons is the norm) and
    * position:fixed elements (offsetParent is null for those by spec).
    */
+  /** SAP UI5's sap.m.Switch — a visibly rendered, user-clickable toggle DIV. */
+  function isUi5Switch(el) {
+    return el instanceof Element && el.classList.contains('sapMSwt');
+  }
+
+  /** Its checked state lives in a class, not in aria-checked (which it does not carry). */
+  function ui5SwitchOn(el) {
+    return el.classList.contains('sapMSwtOn');
+  }
+
   function isVisible(el) {
     if (!(el instanceof Element)) return false;
     if (isFileInput(el)) return true;
     if (el === document.body || el === document.documentElement) return true;
-    // aria-hidden subtrees are invisible to real users — and a favorite
-    // honeypot wrapper. A legitimate form control is never aria-hidden.
-    if (el.closest('[aria-hidden="true"]')) return false;
+    // aria-hidden subtrees used to be dropped outright — "a legitimate form control is
+    // never aria-hidden", and honeypots love that wrapper. Two shipping ATS stacks then
+    // falsified the rule in one week: SAP UI5 renders its consent switch aria-hidden
+    // (SuccessFactors EasyApply), and P&I LOGA marks its ENTIRE form table aria-hidden —
+    // every field of a real application, invisible to read_page, on a portal half of
+    // German public-sector hiring runs on.
+    //
+    // The honest principle: a honeypot works by being invisible to REAL USERS. An element
+    // that is visibly painted, at real size, on the page, is seen and operated by humans
+    // no matter what its ARIA says — it cannot be a trap. So aria-hidden elements pass
+    // exactly when they are actually painted; the unpainted ones remain the traps they
+    // look like. Painted-but-aria-hidden controls are FLAGGED in the inventory (see the
+    // describe call sites), so a model can still honor a field whose label says
+    // "leave this blank".
+    if (el.closest('[aria-hidden="true"]')) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) return false; // painted to nothing — a trap
+      if (r.right + window.scrollX <= 0 || r.bottom + window.scrollY <= 0) return false; // parked off-page
+      try {
+        if (getComputedStyle(el).visibility === 'hidden') return false;
+      } catch {
+        return false;
+      }
+    }
     if (isHoneypotSized(el)) return false;
     if (el.offsetParent !== null) return true;
     try {
@@ -289,6 +320,10 @@
         } else if (sib instanceof Element && isVisible(sib)) {
           text = collapseWs(sib.textContent);
         }
+        // Pure punctuation is a SEPARATOR, not a label. Table-layout forms (P&I LOGA)
+        // put ":" in its own cell between the label cell and the field — returning it
+        // here named every field ":" and hid the real label one hop further back.
+        if (/^[:\-–—*·.\s]+$/.test(text)) text = '';
         if (text) {
           if (text.length <= 60) return text;
           const heading = sib instanceof Element && (/^H[1-6]$/.test(sib.tagName) || sib.matches('[role=heading]'));
@@ -414,19 +449,27 @@
   // (reCAPTCHA v3, Turnstile) show no widget at all and block submissions with no
   // error text, which the model would otherwise diagnose as anything but a captcha.
 
-  /** @returns {{desc: string, visible: boolean}|null} what is on this page, if anything. */
+  /**
+   * @returns {{desc: string, visible: boolean, el: Element|null}|null} what is on this
+   * page, if anything. `el` is the visible widget itself — show_captcha scrolls to and
+   * spotlights it; the text-building consumers ignore it.
+   */
   function detectCaptcha() {
     const firstVisible = (els) => els.find((el) => isVisible(el)) || null;
     const found = (name, els, invisibleNote) => {
-      const vis = firstVisible(els) != null;
+      const el = firstVisible(els);
       return {
-        desc: vis ? name : `${name} (no visible widget${invisibleNote ? ` — ${invisibleNote}` : ''})`,
-        visible: vis,
+        desc: el ? name : `${name} (no visible widget${invisibleNote ? ` — ${invisibleNote}` : ''})`,
+        visible: el != null,
+        el,
       };
     };
 
     const hc = deepQueryAll('.h-captcha, [data-hcaptcha-sitekey], iframe[src*="hcaptcha.com"]');
     if (hc.length) return found('hCaptcha', hc);
+    // FriendlyCaptcha — the SAP EasyApply portals ship it (measured on a live one).
+    const fr = deepQueryAll('.frc-captcha, iframe[src*="friendlycaptcha"]');
+    if (fr.length) return found('FriendlyCaptcha', fr);
     const ts = deepQueryAll('.cf-turnstile, [data-turnstile-sitekey], iframe[src*="challenges.cloudflare.com"]');
     if (ts.length) return found('Cloudflare Turnstile', ts, 'it can block a submit with no error shown');
     const fc = deepQueryAll('#FunCaptcha, [data-pkey], iframe[src*="arkoselabs"]');
@@ -440,16 +483,44 @@
       .filter((el) => !(el.closest && el.closest('.grecaptcha-badge')));
     if (rc.length) return found('reCAPTCHA', rc);
     if (deepQueryAll('.grecaptcha-badge').length) {
-      return { desc: 'reCAPTCHA v3 (invisible — it can block a submit with no error shown)', visible: false };
+      return { desc: 'reCAPTCHA v3 (invisible — it can block a submit with no error shown)', visible: false, el: null };
     }
     // reCAPTCHA v3 loads as a script with a render= key and never shows a widget.
     for (const s of document.querySelectorAll('script[src*="recaptcha"][src*="render="]')) {
       const m = /[?&]render=([^&]+)/.exec(s.src || '');
       if (m && m[1] !== 'explicit') {
-        return { desc: 'reCAPTCHA v3 (invisible — it can block a submit with no error shown)', visible: false };
+        return { desc: 'reCAPTCHA v3 (invisible — it can block a submit with no error shown)', visible: false, el: null };
       }
     }
     return null;
+  }
+
+  /**
+   * show_captcha — point the USER at the challenge. Called (in every frame) when the
+   * agent hands a captcha over: scrolls the widget to center and spotlights it for a few
+   * seconds, so the person arriving from the side panel does not have to hunt the page
+   * for a small checkbox. Read-only as far as the page is concerned — the outline is
+   * inline style, restored on a timer, and never part of what read_page reports.
+   */
+  function toolShowCaptcha() {
+    const captcha = detectCaptcha();
+    // A frame with no captcha throws — like every other tool impl, the message listener
+    // turns it into {ok:false}; execAllFrames treats subframe misses as the normal case.
+    if (!captcha) throw new Error('No captcha in this frame.');
+    if (!captcha.el) {
+      return `${captcha.desc}. Nothing to click here — an invisible check verifies on its own; ` +
+        'the user only needs to retry the action that was blocked.';
+    }
+    const el = captcha.el;
+    try { el.scrollIntoView({ block: 'center' }); } catch { /* detached mid-flight */ }
+    const prevOutline = el.style.outline;
+    const prevOffset = el.style.outlineOffset;
+    el.style.outline = '3px solid #e0a03a';
+    el.style.outlineOffset = '3px';
+    setTimeout(() => {
+      try { el.style.outline = prevOutline; el.style.outlineOffset = prevOffset; } catch { /* gone */ }
+    }, 8000);
+    return `${captcha.desc} is on screen and highlighted.`;
   }
 
   /** Visible error text in/around a field (its container, up to 3 ancestor levels). */
@@ -621,6 +692,16 @@
     '[role=option]',
     '[role=checkbox]',
     '[role=radio]',
+    // A proper ARIA switch is a checkbox in different clothes; it was simply missing.
+    '[role=switch]',
+    // SAP UI5's switch carries NO role at all (and is aria-hidden — see isVisible), so
+    // only its class can find it. Framework-specific, like isWdPrompt above, and for the
+    // same reason: without it the consent toggle gating a SuccessFactors submission does
+    // not exist as far as read_page is concerned.
+    '.sapMSwt',
+    // P&I LOGA (pi-asp.de Bewerber-Web): every button — including "JETZT BEWERBEN",
+    // the submit — is a role-less DIV with this class. Same precedent as .sapMSwt.
+    '.LG-Button',
     '[role=textbox]',
     '[contenteditable=true]',
     '[contenteditable=""]',
@@ -804,7 +885,8 @@
       return line;
     }
 
-    if (el instanceof HTMLButtonElement || role === 'button') {
+    if (el instanceof HTMLButtonElement || role === 'button'
+      || (el instanceof Element && el.classList.contains('LG-Button'))) {
       const ref = assign(el);
       let line = `[${ref}] button ${q(buttonName(el))}`;
       if (el.disabled || el.getAttribute('aria-disabled') === 'true') line += ' disabled';
@@ -826,9 +908,16 @@
       const selected = el.getAttribute('aria-selected') === 'true';
       return `[${ref}] option ${q(buttonName(el))} selected=${selected}`;
     }
-    if (role === 'checkbox') {
+    if (role === 'checkbox' || role === 'switch') {
       const ref = assign(el);
       return `[${ref}] checkbox label=${q(labelFor(el) || buttonName(el))} checked=${el.getAttribute('aria-checked') === 'true'}`;
+    }
+    if (isUi5Switch(el)) {
+      const ref = assign(el);
+      // No label plumbing at all on these — no <label for>, no aria. The id is often the
+      // one descriptive string the page gives us ("privacy-switch"), so it is the fallback.
+      const name = labelFor(el) || collapseWs(el.id) || buttonName(el);
+      return `[${ref}] checkbox label=${q(name)} checked=${ui5SwitchOn(el)} (toggle switch — use set_checkbox)`;
     }
     if (role === 'radio') {
       const ref = assign(el);
@@ -888,6 +977,11 @@
         console.debug('[jobpilot] describe failed:', err);
       }
       if (!line) continue;
+      // A visible control inside an aria-hidden subtree is operable (see isVisible), but
+      // the page DID mark it — usually framework noise (SAP UI5, P&I LOGA), occasionally
+      // a visible trap whose label says "leave blank". The flag hands the model the fact;
+      // the label carries the judgment.
+      if (el.closest('[aria-hidden="true"]')) line += ' (aria-hidden)';
       if (isPlainLink) linkCount++;
       entries.push({ el, line });
     }
@@ -1120,7 +1214,8 @@
     dropdown: (el) => el instanceof HTMLSelectElement || isWdPrompt(el) ||
       ['combobox', 'listbox'].includes((el.getAttribute('role') || '').toLowerCase()),
     checkbox: (el) => (el instanceof HTMLInputElement && el.type === 'checkbox') ||
-      ['checkbox', 'switch'].includes((el.getAttribute('role') || '').toLowerCase()),
+      ['checkbox', 'switch'].includes((el.getAttribute('role') || '').toLowerCase()) ||
+      isUi5Switch(el),
     radio: (el) => (el instanceof HTMLInputElement && el.type === 'radio') ||
       (el.getAttribute('role') || '').toLowerCase() === 'radio',
     file: (el) => isFileInput(el),
@@ -1239,6 +1334,7 @@
       try {
         line = describeElement(el, (e) => refFor(e), seenRadioGroups);
       } catch { line = null; }
+      if (line && el.closest('[aria-hidden="true"]')) line += ' (aria-hidden)'; // same flag as read_page
       if (line) lines.push(line);
     }
     const out = [`FOUND ${lines.length} match${lines.length === 1 ? '' : 'es'} for ${q(want)}${role && role !== 'any' ? ` (role=${role})` : ''}, best first:`];
@@ -1818,6 +1914,22 @@
         return `Clicked checkbox ${q(displayLabel)} but it is still checked=${el.checked}. It may be disabled or script-controlled — try click on its label instead.`;
       }
       return `Checkbox ${q(displayLabel)} is now checked=${el.checked}.`;
+    }
+
+    // BEFORE the role branch: a UI5 switch has no role and no aria-checked, so the state
+    // that must be read and verified is its class. Verified against the live control: a
+    // synthetic click sequence flips sapMSwtOff <-> sapMSwtOn.
+    if (isUi5Switch(el)) {
+      const current = ui5SwitchOn(el);
+      if (current === desired) return `Checkbox ${q(displayLabel)} was already checked=${current} — no change.`;
+      el.scrollIntoView({ block: 'center' });
+      dispatchClickSequence(el);
+      await sleep(150); // the flip is animated (sapMSwtTrans); give the class time to land
+      const now = ui5SwitchOn(el);
+      if (now !== desired) {
+        return `Clicked toggle ${q(displayLabel)} but it is still ${now ? 'on' : 'off'}. Try click on it, then read_page to verify.`;
+      }
+      return `Checkbox ${q(displayLabel)} is now checked=${now}.`;
     }
 
     const role = (el.getAttribute('role') || '').toLowerCase();
@@ -4237,6 +4349,9 @@
       // CONTRACT-V7 — the DOM escape hatch: look, then drive it by hand.
       case 'inspect_dom': return toolInspectDom(a);
       case 'dom_act': return toolDomAct(a);
+      // Internal: driven by the agent's request_captcha handoff, never called by the
+      // model directly.
+      case 'show_captcha': return toolShowCaptcha();
       // CONTRACT-V6 — internal: driven by the panel's recording UI and run_macro,
       // never exposed to the model in TOOL_DEFS.
       case 'record_start': return toolRecordStart();

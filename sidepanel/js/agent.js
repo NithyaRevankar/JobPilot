@@ -2,7 +2,11 @@
 // tool execution, ask_user pause, done handling, context pruning, maxSteps guard.
 
 import { chatStream } from './llm.js';
-import { TOOL_DEFS, executeTool, toolLabel, fillSecret, getTabHost, getRefHost, runMacro, waitForComplete } from './tools.js';
+import {
+  TOOL_DEFS, executeTool, toolLabel, fillSecret, getTabHost, getRefHost, runMacro,
+  showCaptchaInTab,
+  waitForComplete, needsAttachment, visibleErrorText,
+} from './tools.js';
 import { buildSystemPrompt } from './prompts.js';
 import {
   PLAN_FILL_TOOLS, PLAN_GATE_MESSAGE,
@@ -12,6 +16,7 @@ import {
   getSettings, getProfile, getDocuments,
   getPlaybook, savePlaybook, getSiteNote, saveSiteNote, bumpPlaybookUse,
   getMacrosFor, markMacroResult,
+  APPLICATION_STATUSES, logApplication,
 } from './storage.js';
 import { detectPlatform, platformLabel, PLATFORMS } from './platforms.js';
 import * as vault from './vault.js';
@@ -50,6 +55,15 @@ const LOOP_LOCAL_TOOLS = new Set(['ask_user', 'done', 'remember']);
 
 /** The value-writing tools the plan gate intercepts. A Set for the per-call lookup. */
 const PLAN_GATED_TOOLS = new Set(PLAN_FILL_TOOLS);
+
+/**
+ * How long to let a page paint its validation before deciding whether a submit landed.
+ *
+ * Long enough for the synchronous re-render every ATS does, short enough not to feel like a
+ * hang at the exact moment the user is watching for an answer. Too short is the dangerous
+ * direction: a read taken before the error appears reads as "submitted".
+ */
+const SUBMIT_SETTLE_S = 1.2;
 // A click's window.open often fires a beat AFTER the click's tool result has returned
 // (analytics first, popup second). A tab created within this many ms of the last page
 // tool still counts as caused by it; anything later is the user browsing and is not ours
@@ -110,6 +124,9 @@ export class AgentRunner {
     // value-writing tool call made without a plan, or by the first propose_plan. See
     // PLAN_GATE_MESSAGE for why it fires at most once.
     this.planGate = false;
+    // CONTRACT-V11 §6. Spent by the first confirm_submit that finds the page already
+    // complaining — so the user is not asked to approve a submit that cannot land.
+    this.submitPreflight = true;
   }
 
   get isRunning() {
@@ -167,6 +184,7 @@ export class AgentRunner {
       const planning = planMode !== 'off' && typeof this.cb.onProposePlan === 'function';
       const tools = planning ? TOOL_DEFS : TOOL_DEFS.filter((t) => t.function.name !== 'propose_plan');
       this.planGate = planning;
+      this.submitPreflight = true;
 
       // Within one run, keep acting on the tab captured at run start (§10);
       // if that tab closes, re-target the active tab but surface it as a tool
@@ -433,6 +451,12 @@ export class AgentRunner {
               });
               answeredIds.add(tc.id);
               this.cb.onToolEnd({ name: tc.name, ok: true, result: `${args.status || 'done'} — ${args.summary || ''}` });
+              // The application log (the tracker). Captured HERE because this is the one
+              // moment everything is in hand: the outcome, the model's clean job_title /
+              // company from the posting, the tab's real URL, and the detected portal.
+              // Await-ed so a panel closing right after done cannot lose the record;
+              // failures are swallowed — the tracker is a courtesy, never a run-killer.
+              await this.logOutcome(args).catch(() => {});
               this.cb.onDone({
                 status: args.status || 'answered',
                 summary: String(args.summary || ''),
@@ -453,9 +477,23 @@ export class AgentRunner {
               ok = res.ok;
               resultText = res.ok ? res.result : res.error;
               if (this.stopped) break;
+            } else if (tc.name === 'confirm_submit') {
+              // CONTRACT-V11 §5. Two buttons, then the click. Page-touching (submitting is
+              // the navigation), so it sits inside the adoption bracket like any other.
+              const res = await this.handleConfirmSubmit(args, getTabId, signal, settings);
+              ok = res.ok;
+              resultText = res.ok ? res.result : res.error;
+              if (this.stopped) break;
             } else if (tc.name === 'request_demo') {
               // CONTRACT-V6 §5.1. The run pauses; the user does it by hand; we watch.
               const res = await this.handleRequestDemo(args);
+              ok = res.ok;
+              resultText = res.ok ? res.result : res.error;
+              if (this.stopped) break;
+            } else if (tc.name === 'request_captcha') {
+              // The one human handoff with nothing to type: focus the tab, spotlight the
+              // widget, one-button dialog. Never a free-text question.
+              const res = await this.handleRequestCaptcha(args);
               ok = res.ok;
               resultText = res.ok ? res.result : res.error;
               if (this.stopped) break;
@@ -851,8 +889,142 @@ export class AgentRunner {
         refused,
         autoApproved,
         stopped: stoppedEarly,
+        unpacked,
       }),
     };
+  }
+
+  /**
+   * `confirm_submit` (CONTRACT-V11 §5). The go-ahead for the final submit — one dialog,
+   * two buttons — and then the click.
+   *
+   * WHY IT CLICKS. The confirmation used to be an ask_user: a text box, into which the user
+   * typed "yes", followed by a second press on the dialog's own Submit button. Two actions
+   * and a guess at the magic word, for the most consequential moment in a run. Worse, the
+   * word only ever told the MODEL it had permission — the actual click came later, as a
+   * separate step that could error, land on a different control, or never happen because
+   * the run was stopped in between. A dialog whose button says Submit and which does not
+   * submit is a dialog that lies. So approval and click are one thing here.
+   *
+   * WHY autoSubmit STILL SHORT-CIRCUITS. With auto-submit on, rule 8 tells the model it may
+   * click without asking, so a model calling this anyway has simply been careful. Popping a
+   * confirmation the user explicitly turned off would be the extension overriding a setting
+   * because it disapproved of it; clicking and saying so is the honest reading.
+   */
+  async handleConfirmSubmit(args, getTabId, signal, settings) {
+    const ref = String((args && args.ref) || '').trim();
+    if (!ref) {
+      return { ok: false, error: 'confirm_submit needs the ref of the submit button. Call read_page (or find "Submit") and pass it.' };
+    }
+    const label = String((args && args.label) || '').trim();
+    const summary = String((args && args.summary) || '').trim();
+
+    const readErrors = async () => {
+      try {
+        return visibleErrorText(await executeTool('read_errors', {}, getTabId, signal));
+      } catch {
+        return ''; // never let the check itself break a submit
+      }
+    };
+
+    const click = async (note) => {
+      const res = await executeTool('click', { ref }, getTabId, signal);
+      if (!res.ok) {
+        // The click failing is NOT the user declining, and the difference matters: a
+        // cookie banner over the button (which `click` refuses by design) must send the
+        // model back to clear it, not make it report the application as awaiting review.
+        return {
+          ok: false,
+          error: `${note} But the click FAILED: ${String(res.error)}\nThe application was NOT submitted. ` +
+            'Fix what the error describes and call confirm_submit again — do not tell the user it was submitted, and do not call done with status "submitted".',
+        };
+      }
+
+      // CONTRACT-V11 §6 — did the form actually take it?
+      //
+      // THE FAILURE THIS EXISTS FOR. A portal refuses the submit and paints its own reason
+      // ("Final certificate - Attachment is required"). The click itself SUCCEEDED — the
+      // button was there and it was pressed — so nothing in the result said otherwise, and
+      // the only thing standing between that and "Application submitted ✓" in the chat was
+      // the model remembering to verify. Rule 9 asks it to; a rule is not a guarantee, and
+      // being wrong here means telling someone they applied for a job when they did not.
+      // So the panel checks, every time, and the check is not the model's to skip.
+      //
+      // The pause is because validation renders a beat after the click, and a read taken
+      // too early sees a clean page and calls it submitted.
+      await executeTool('wait', { seconds: SUBMIT_SETTLE_S }, getTabId, signal);
+      const errors = await readErrors();
+      if (errors) {
+        // Tell the USER, not only the model. This is the moment they were waiting on —
+        // they approved a submit and it did not happen — and it must not be something they
+        // have to expand a tool result to discover.
+        if (typeof this.cb.onSubmitBlocked === 'function') {
+          try { this.cb.onSubmitBlocked({ errors, label, attachment: needsAttachment(errors) }); } catch { /* UI only */ }
+        }
+        const fileHint = needsAttachment(errors)
+          ? ' This one is asking for a FILE: attach it with upload_file if a stored document fits. ' +
+            'If none does, the user has to add it in the Profile tab first — ask_user for it and say so plainly, ' +
+            'because this is a blocker you cannot clear on your own.'
+          : '';
+        return {
+          ok: false,
+          error: `${note} The button was clicked, but the form REFUSED the submission and is showing:\n${errors}\n\n` +
+            `The application was NOT submitted.${fileHint} Fix what is listed, then call confirm_submit again. ` +
+            'Do NOT call done with status "submitted", and do not tell the user it went through.',
+        };
+      }
+
+      return {
+        ok: true,
+        result: `${note} ${String(res.result ?? 'Clicked.')}\nNo validation errors are showing afterwards. ` +
+          'Now confirm it actually went through (rule 9): read_page for the confirmation message or reference number, then call done with the true outcome.',
+      };
+    };
+
+    if (settings && settings.autoSubmit) {
+      return click('Auto-submit is ON, so the user was not asked.');
+    }
+
+    // Do not spend the user's one click on a submit the page is ALREADY refusing. Fires at
+    // most once per run for the same reason the plan gate does: a page that keeps a
+    // harmless notice permanently on screen would otherwise never be submittable at all,
+    // and a form the user cannot submit is worse than a wasted click.
+    if (this.submitPreflight) {
+      this.submitPreflight = false;
+      const pre = await readErrors();
+      if (pre) {
+        return {
+          ok: false,
+          error: 'Not asking the user yet — the page is ALREADY showing unresolved problems, so a submit now ' +
+            `would just bounce:\n${pre}\n\n` +
+            (needsAttachment(pre)
+              ? 'This includes a required FILE — use upload_file, or ask_user for a document the profile does not have. '
+              : '') +
+            'Clear these first, then call confirm_submit again and it will go through to the user. ' +
+            'If you have judged them irrelevant, calling again is enough — this check happens once.',
+        };
+      }
+    }
+    if (typeof this.cb.onConfirmSubmit !== 'function') {
+      return { ok: false, error: 'This build cannot show a submit confirmation. Call done with status "ready_for_review" and let the user submit.' };
+    }
+
+    this.status('Waiting for you to approve the submit…');
+    let approved = false;
+    try {
+      approved = await this.cb.onConfirmSubmit({ ref, label, summary });
+    } catch {
+      approved = false;
+    }
+    if (this.stopped) return { ok: false, error: 'Stopped.' };
+    if (!approved) {
+      return {
+        ok: false,
+        error: 'The user did NOT approve the submit. Nothing was clicked and the form is left filled exactly as it is. ' +
+          'Do not try to submit another way and do not ask again — call done with status "ready_for_review" so they can look it over themselves.',
+      };
+    }
+    return click('The user approved the submit.');
   }
 
   /**
@@ -864,6 +1036,75 @@ export class AgentRunner {
    *   - the action is ALREADY DONE (the user just did it) — do not repeat it;
    *   - the macro is saved for the portal, so next time call run_macro instead.
    */
+  /**
+   * `request_captcha` — the captcha handoff.
+   *
+   * This replaced the model calling ask_user with prose like "please check the box and
+   * let me know", which rendered as a QUESTION dialog: a text field the user had to type
+   * something into before Submit would engage. There is nothing to type about a captcha.
+   * Now: the tab comes to the front, the content script scrolls the widget to center and
+   * spotlights it, and the panel shows a single Continue button.
+   */
+  /**
+   * Write the application-log record for a finished run. Only outcomes that ARE an
+   * application count (storage.APPLICATION_STATUSES): submitted, ready_for_review,
+   * already_applied — never blocked or answered.
+   */
+  async logOutcome(args) {
+    const status = String(args.status || '');
+    if (!APPLICATION_STATUSES.includes(status)) return;
+    let url = '';
+    let host = '';
+    try {
+      const tab = await chrome.tabs.get(this.tabId);
+      url = tab.url || '';
+      host = new URL(url).hostname.replace(/^www\./i, '');
+    } catch { /* tab gone — the record still carries title/company/date */ }
+    await logApplication({
+      submittedAt: Date.now(),
+      status,
+      jobTitle: String(args.job_title || '').trim(),
+      company: String(args.company || '').trim(),
+      url,
+      host,
+      portal: (this.memory && this.memory.platform) || '',
+      runId: this.runId,
+    });
+  }
+
+  async handleRequestCaptcha(args) {
+    if (!this.cb.onRequestCaptcha) {
+      return { ok: false, error: 'This build cannot hand a captcha over. Ask the user in chat to solve it, then continue.' };
+    }
+    if (!this.getTabId) {
+      return { ok: false, error: 'Internal error: no working tab is bound to this run.' };
+    }
+    const shown = await showCaptchaInTab(this.getTabId);
+    if (!shown.ok) return { ok: false, error: shown.error };
+
+    this.status('Waiting for you to solve the captcha…');
+    let solved = false;
+    try {
+      solved = await this.cb.onRequestCaptcha({
+        reason: String(args.reason || '').slice(0, 120),
+        found: shown.found || '',
+      });
+    } catch {
+      solved = false;
+    }
+    if (this.stopped) return { ok: false, error: 'Stopped.' };
+    if (!solved) {
+      return {
+        ok: false,
+        error: 'The user did not confirm the captcha. Do not retry it — call done with status "blocked" and say a captcha is in the way.',
+      };
+    }
+    return {
+      ok: true,
+      result: 'The user says the captcha is solved. Retry the action that was blocked, then read_errors to verify it went through.',
+    };
+  }
+
   async handleRequestDemo(args) {
     const asked = String(args.goal || '').trim();
     if (!asked) return { ok: false, error: 'request_demo needs a goal — say what you are stuck on.' };

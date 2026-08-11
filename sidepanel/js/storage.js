@@ -391,6 +391,96 @@ export async function clearChats(runId = DEFAULT_RUN_ID) {
   });
 }
 
+// ------------------------------------------------------ the application log
+//
+// One record per application, captured by the agent loop at `done`. This is the tracker
+// the transcript cannot be: transcripts are capped, per-run, and cleared by New Chat,
+// while "what did I apply to, where, and when" has to survive all of that. Local like
+// everything else, and in BACKUP_KEYS so export/import/wipe carry it automatically.
+//
+// Which outcomes count: submitted, ready_for_review (the user clicked the button
+// themselves — a tracker with holes where the manual submits were is not a tracker) and
+// already_applied (knowing you already applied IS tracking data). Never blocked or
+// answered — neither is an application.
+
+/** @typedef {{id:string, submittedAt:number, status:string, jobTitle:string,
+ *             company:string, url:string, host:string, portal:string, runId:string}} ApplicationRecord */
+
+export const APPLICATION_STATUSES = Object.freeze(['submitted', 'ready_for_review', 'already_applied']);
+const MAX_APPLICATIONS = 500;
+
+function normalizeApplication(a) {
+  if (!isPlainObject(a)) return null;
+  const rec = {
+    id: typeof a.id === 'string' && a.id ? a.id : crypto.randomUUID(),
+    submittedAt: Number.isFinite(a.submittedAt) ? a.submittedAt : Date.now(),
+    status: APPLICATION_STATUSES.includes(a.status) ? a.status : 'submitted',
+    jobTitle: String(a.jobTitle || '').slice(0, 160),
+    company: String(a.company || '').slice(0, 120),
+    url: String(a.url || '').slice(0, 600),
+    host: String(a.host || '').slice(0, 120),
+    portal: String(a.portal || '').slice(0, 40),
+    runId: String(a.runId || '').slice(0, 60),
+  };
+  // A record with no title, no company and no URL identifies nothing — drop it.
+  if (!rec.jobTitle && !rec.company && !rec.url) return null;
+  return rec;
+}
+
+/** Accepts anything (imports are hand-editable files); returns newest-first records. */
+export function normalizeApplications(value) {
+  const list = (Array.isArray(value) ? value : [])
+    .map(normalizeApplication)
+    .filter(Boolean)
+    .sort((x, y) => y.submittedAt - x.submittedAt);
+  return list.slice(0, MAX_APPLICATIONS);
+}
+
+export async function getApplications() {
+  return normalizeApplications(await get('applications'));
+}
+
+/**
+ * Append one record, under the lock — three concurrent runs can finish together.
+ * Returns the stored record.
+ */
+export async function logApplication(app) {
+  const rec = normalizeApplication(app);
+  if (!rec) return null;
+  await withWriteLock('applications', async () => {
+    const list = normalizeApplications(await get('applications'));
+    list.unshift(rec);
+    await set('applications', list.slice(0, MAX_APPLICATIONS));
+  });
+  return rec;
+}
+
+export async function deleteApplication(id) {
+  await withWriteLock('applications', async () => {
+    const list = normalizeApplications(await get('applications'));
+    await set('applications', list.filter((a) => a.id !== id));
+  });
+}
+
+/**
+ * The log as CSV, for Excel / Google Sheets. Pure, so node can test the quoting — a
+ * job title containing a comma or a quote is the NORMAL case, not the edge case.
+ */
+export function applicationsToCsv(records) {
+  const esc = (v) => {
+    const s = String(v ?? '');
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const rows = [['date', 'status', 'job_title', 'company', 'url', 'portal', 'host']];
+  for (const a of (records || [])) {
+    rows.push([
+      new Date(a.submittedAt).toISOString().slice(0, 10),
+      a.status, a.jobTitle, a.company, a.url, a.portal, a.host,
+    ]);
+  }
+  return rows.map((r) => r.map(esc).join(',')).join('\r\n');
+}
+
 // ------------------------------------------------------- memory bank (V3 §1)
 //
 // Playbooks are keyed by PORTAL, never by employer (V3 §0): one Workday playbook serves
@@ -1060,6 +1150,10 @@ export async function clearAllData() {
  */
 export const BACKUP_KEYS = Object.freeze([
   'settings', 'profile', 'documents', 'chatHistory', 'vault', 'playbooks', 'siteNotes', 'macros',
+  // The application log. Additive, so no BACKUP_FORMAT bump: an older build importing a
+  // newer file simply does not restore this key, which loses tracker rows it could not
+  // display anyway — not user data it silently corrupts.
+  'applications',
 ]);
 
 /**
@@ -1332,6 +1426,9 @@ export async function importAllData(data) {
         break;
       case 'macros':
         next.macros = normalizeMacros(raw);
+        break;
+      case 'applications':
+        next.applications = normalizeApplications(raw);
         break;
       case 'vault': {
         const blob = normalizeVaultBlob(raw);

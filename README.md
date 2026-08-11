@@ -39,6 +39,46 @@ to the LLM endpoint you configured.
   the form, and `read_page` cannot see it. If the side panel is closed — or crashes — the
   page takes the indicator down by itself: a tab must never be left announcing that a dead
   process is typing into it.
+- **Plan mode — one review per page, not fifteen interruptions.** The agent used to
+  discover what it did not know the way it walked the form: fill three fields, hit a
+  question, stop and ask, fill two more, stop again. A six-page Workday wizard cost you
+  fifteen interruptions, and everything it *could* answer was filled silently — so what
+  went into your application was something you found out afterwards, from an activity log,
+  one row at a time. Now it reads the whole page first and shows you **one card**: every
+  value it intends to enter, and every question it cannot answer. Each value says where it
+  came from — *profile · Phone*, *you answered before*, or **worked out**, which is the one
+  worth reading, because it is the model's own judgement rather than something of yours.
+  Correct anything, untick what should stay empty, answer the questions, approve — and the
+  page is filled in a single step. Unticked means unticked: the agent is told you decided
+  it, not that it failed, so it does not go back and fill it anyway.
+  Three settings: **Show me each page** (the default), **Only when there is something to
+  decide** — the card appears for a question or a worked-out value, so the later pages of a
+  wizard pass without stopping you at all — and **Off**, which behaves exactly as JobPilot
+  did before plan mode existed, down to the tool list the model is sent. Credentials can
+  never appear in a plan; they still go through the vault path, unseen by the model.
+- **Setting up is one upload, not twenty-five boxes.** The Profile tab asks for ~25 values
+  across eight sections, and nobody fills that on the day they install an extension — so the
+  usual first run is against a name and an email, and then the agent has to stop and ask for
+  everything else, one application at a time. **Fill from my resume** answers it: JobPilot
+  already extracts the text of your upload, so one model call reads the plain facts off it
+  and proposes them in the same review card plan mode uses. You accept them per field.
+  Nothing is written until you do, a value that would **replace something you typed starts
+  unticked and marked** — what you typed wins — and the extractor is not allowed to touch
+  visa status, sponsorship, salary or notice period, because a resume does not state them
+  and a model asked for them anyway will produce something plausible.
+- **A readiness meter that names what to fill next.** "60% complete" tells you nothing, so
+  the meter is weighted by how often forms actually ask (a missing phone number costs more
+  than a missing Address line 2) and it *lists* the gaps worst-first, each a link straight to
+  the box. One part of that ranking is not a general claim but evidence: if a real form has
+  already made the agent stop and ask you for something, the meter says **"a form asked you
+  this 2 times"** and promotes it. Self-identification is deliberately excluded — a blank
+  there is a complete answer, and no percentage is worth nudging somebody toward disclosing
+  a protected characteristic.
+- **A first-run checklist that goes away.** Three steps in the header — connect an LLM, add a
+  resume JobPilot can *read*, fill name/email/phone — each a button to the tab that finishes
+  it. It disappears the moment they are done, because a strip that survives completion is a
+  nag. Nothing about it blocks the panel: the fastest way to understand JobPilot is still to
+  point it at a job.
 - **Memory bank**: reusable playbooks for how to apply on each job portal, keyed by
   **portal, not company**. Workday, Greenhouse, Lever, iCIMS, Taleo, SuccessFactors,
   SmartRecruiters, Workable, Ashby and LinkedIn ship with a playbook, and the agent
@@ -108,8 +148,27 @@ to the LLM endpoint you configured.
   has cost you.
 - Document store: resumes/cover letters (PDF, DOC, DOCX, TXT; up to 8 MB each)
   kept locally as base64 with a default-document toggle.
-- Confirmation-before-submit by default (`autoSubmit` off). The agent must ask
-  you before it clicks a final submit button.
+- **Confirmation-before-submit by default** (`autoSubmit` off), and it is **one click**.
+  The dialog names what is being sent and which button will be pressed, and offers exactly
+  two answers: **Submit** and **Cancel**. Nothing to type — this used to arrive as an
+  ordinary question, which meant a text box you had to put "yes" into and then a second
+  press to send it, for the one moment in a run that most deserves to be simple. Submit
+  *submits*: the approval and the click are the same action, so a dialog whose button says
+  Submit can never leave the form unsent. Cancel clicks nothing and leaves the form filled
+  exactly as it is, for you to look over yourself.
+- **And when the form refuses, you are told — in the portal's own words.** Plenty of
+  applications bounce on a required field the agent could not satisfy: *"Please go back to
+  these steps before submitting your application — Final certificate - Attachment is
+  required."* The **click** succeeds in that case (the button was there and it was pressed),
+  so nothing in the result contradicts it, and the only thing standing between that and
+  "Application submitted ✓" in the chat was the model remembering to check. JobPilot checks
+  itself, every time: after an approved submit it reads the page's own validation and, if the
+  form pushed back, says so as **Not submitted — the form is still asking for: …**, quoting
+  the message you will find waiting in the tab. Anything asking for a **file** is called out
+  separately, because it is the one blocker the agent usually cannot clear alone — it will
+  attach a stored document if one fits, and otherwise tell you to add it in the Profile tab.
+  The agent is forbidden from reporting a bounced application as submitted. And it will not
+  spend your click at all on a page that is *already* showing unresolved problems.
 - Multi-frame support: forms embedded in iframes (the common Greenhouse/Lever
   embed pattern) are enumerated and operated on per frame.
 - One form for every question the agent has. A page with five unknowns is **one**
@@ -204,6 +263,10 @@ temperature.
 
 In the **Profile** tab:
 
+0. Drop your resume in, then press **Fill from my resume** at the top. One model call reads
+   it and proposes values for most of the page; you tick through them and the rest of this
+   list is mostly done. The readiness meter above the button then names whatever is still
+   worth filling, worst first. Everything below can be done by hand instead if you prefer.
 1. Drop your resume (PDF/DOC/DOCX/TXT) into the Documents zone and star it as the
    default. This is the file the agent attaches to "Upload resume" fields.
 2. Fill in the basics: name, email, phone, location, LinkedIn/GitHub/portfolio.
@@ -520,6 +583,10 @@ sidepanel/js/                 the logic layer. Dependency-free, no DOM, NOT Reac
   storage.js                  typed chrome.storage.local access; BACKUP_KEYS is the one
                               definition of "all my data" that the wipe, the export and
                               the import all read from
+  plan.js                     plan mode: what a propose_plan may carry, where each value
+                              came from, and what the model is told the user decided
+  profile-intel.js            onboarding: reading a profile off a resume, ranking what is
+                              still missing, and the three-step setup checklist
   prompts.js                  system prompt built from profile/documents/settings/memory
   platforms.js                ATS portal detection (frame URLs, then DOM fingerprints)
   playbook-seeds.js           shipped playbooks for the ~10 major portals
@@ -576,7 +643,7 @@ script asks the worker on startup whether it is inside a recording, or on a tab 
 driven — which is what carries both across the navigations the agent itself causes. The
 panel heartbeats while each is live, so both expire on their own if it stops.
 
-The LLM sees twenty tools. Twelve execute in the page:
+The LLM sees twenty-two tools. Twelve execute in the page:
 
 | Tool | Purpose |
 | --- | --- |
@@ -599,12 +666,24 @@ to 30s), so wizard transitions don't need guessed sleeps. A failed ref also come
 back with a fresh page snapshot attached, so the model re-targets without spending
 a step on `read_page`.
 
-Five are owned by the agent loop and never reach the page — `ask_user` (pause for your
-answer in chat), `request_secret` (collect a credential the model never sees), `remember`
+Seven are owned by the agent loop and never reach the page — `ask_user` (pause for your
+answer in chat), `propose_plan` (agree a whole page in one card, then fill it),
+`confirm_submit` (the two-button go-ahead for the final submit, which then clicks it),
+`request_secret`
+(collect a credential the model never sees), `remember`
 (write what it learned to the portal playbook), `request_demo` (stop guessing and ask you
 to demonstrate; the extension records it as a macro for the portal) and `run_macro`
 (replay one, verifying every step) — plus `done`, which ends the run with a status of
-`submitted`, `ready_for_review`, `blocked`, or `answered`.
+`submitted`, `ready_for_review`, `already_applied`, `blocked`, or `answered`.
+
+`propose_plan` and `confirm_submit` are the two of those that act on the page, and they do it
+*through the other tools*: once you approve, the panel dispatches each entry down the ordinary `fill` /
+`select_option` / `choose_option` / `set_checkbox` path, one at a time. Every guard that
+makes a fill safe — the credential refusal, the hidden-field refusal, the framework-safe
+setter, the focus-loss commit, the stale-ref snapshot — is already on that path, and a
+second entrance beside it would be a second thing to keep correct. It also means the model
+does not spend a step per field re-issuing fills it has already written down: twenty
+round-trips become one.
 
 The agent loop streams the model's reply, executes tool calls sequentially,
 feeds results (including failures — the model self-corrects) back into the
